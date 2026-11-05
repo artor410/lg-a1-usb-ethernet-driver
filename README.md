@@ -4,8 +4,9 @@ Driver **r8152** para usar um adaptador **USB-Ethernet Realtek (RTL8152/RTL8153)
 da plataforma **lm21u** (ex.: **OLED A1**, 2021), com um app para o **Homebrew Channel** que ativa o driver
 com o controle remoto.
 
-A porta de rede das TVs LG é de 100 Mbit/s. A porta USB da TV é 2.0, então com um adaptador gigabit dá para
-chegar a algo em torno de 300 Mbit/s — útil para Plex, Jellyfin, Moonlight e afins.
+A porta de rede das TVs LG é de 100 Mbit/s. Com um adaptador gigabit na porta USB (2.0) a TV passa desse
+limite — medimos 111 Mbit/s, com o teste limitado pela internet e pelo PC — útil para Plex, Jellyfin,
+Moonlight e afins.
 
 *English summary [below](#english).*
 

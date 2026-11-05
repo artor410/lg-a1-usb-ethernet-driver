@@ -11,8 +11,8 @@ requirements:
   webosRelease: '>=6.0'   # o próprio app recusa TVs fora de lm21u / kernel 4.4.84
 description: |
   Loads the **r8152** kernel driver so Realtek **RTL8152/RTL8153** USB Ethernet adapters work on
-  LG webOS 6 TVs with the **lm21u** platform (e.g. OLED A1, 2021). The TV's built-in port is 100 Mbit/s;
-  a gigabit USB adapter reaches roughly 300 Mbit/s on the TV's USB 2.0 port.
+  LG webOS 6 TVs with the **lm21u** platform (e.g. OLED A1, 2021). The TV's built-in port is limited to
+  100 Mbit/s; with a gigabit USB adapter we measured 111 Mbit/s (the test setup itself was capped near 100).
 
   - Requires root. Only loads on kernel `4.4.84` / platform `lm21u`; refuses on any other TV.
   - Load the driver on demand, or at every startup (with a boot-loop guard).
