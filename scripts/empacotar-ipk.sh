@@ -12,7 +12,7 @@ ID=$(campo id)
 VERSAO=$(campo version)
 TITULO=$(campo title)
 VENDOR=$(campo vendor)
-REPO_URL=${REPO_URL:-https://github.com/OWNER/lg-a1-usb-ethernet-driver}
+REPO_URL=${REPO_URL:-https://github.com/artor410/lg-a1-usb-ethernet-driver}
 KO=prebuilt/r8152-4.4.84-lm21u.ko
 
 [[ -r $KO ]] || { echo "Falta $KO (rode scripts/compilar-r8152.sh e copie build/r8152.ko)" >&2; exit 1; }
@@ -95,6 +95,9 @@ print(json.dumps({
 }, indent=2))
 EOF
 
+bash "$RAIZ/scripts/gerar-indice.sh"
+
 echo "Pacote:    dist/$IPK ($(du -h "dist/$IPK" | cut -f1))"
 echo "Manifesto: dist/$ID.manifest.json"
+
 echo "SHA-256:   $SHA"

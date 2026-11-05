@@ -66,25 +66,42 @@ Adaptadores **RTL8156 (2.5G)** e **ASIX** não são reconhecidos por este driver
 
 ## Instalação
 
-1. Baixe o arquivo `io.github.artor410.lgusbethernet_<versão>_all.ipk` na página de
-   [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases).
-2. Instale na TV por **um** destes jeitos:
+### Pelo Homebrew Channel (recomendado)
 
-   **a) webOS Dev Manager** (mais simples): abra o
-   [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), conecte na TV, vá em
-   **Apps → Install** e escolha o `.ipk`.
+Adicione este repositório no Homebrew Channel da TV. Assim o app aparece na lista e as atualizações
+chegam por lá.
 
-   **b) Pelo SSH** (TV com root):
+1. Na TV, abra o **Homebrew Channel** → **Settings** (engrenagem) → **Repositories** → **Add repository**.
+2. Digite esta URL e confirme em **Add repository**:
 
-   ```sh
-   scp io.github.artor410.lgusbethernet_<versão>_all.ipk root@IP_DA_TV:/tmp/app.ipk
-   ssh root@IP_DA_TV
-   luna-send -n 6 luna://com.webos.appInstallService/dev/install \
-     '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
+   ```
+   https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json
    ```
 
-   **c) Homebrew Channel:** quando os testes terminarem, o app será enviado ao repositório oficial do
-   Homebrew Channel; aí bastará procurar por *USB Ethernet* na loja do Homebrew.
+3. Volte para a lista de apps: **USB Ethernet (RTL8153)** aparece marcado com *(from …)*. Abra e use
+   **Install**.
+
+Digitar a URL com o controle remoto é chato; com acesso SSH dá para abrir o Homebrew Channel já com a URL
+preenchida (só falta confirmar na TV):
+
+```sh
+luna-send -n 1 luna://com.webos.applicationManager/launch   '{"id":"org.webosbrew.hbchannel","params":{"launchMode":"addRepository","url":"https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json"}}'
+```
+
+### Instalação manual do `.ipk`
+
+Baixe `io.github.artor410.lgusbethernet_<versão>_all.ipk` em
+[Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) e instale por **um** destes jeitos:
+
+- **webOS Dev Manager:** abra o [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop),
+  conecte na TV, vá em **Apps → Install** e escolha o `.ipk`.
+- **Pelo SSH** (TV com root):
+
+  ```sh
+  scp io.github.artor410.lgusbethernet_<versão>_all.ipk root@IP_DA_TV:/tmp/app.ipk
+  ssh root@IP_DA_TV
+  luna-send -n 6 luna://com.webos.appInstallService/dev/install     '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
+  ```
 
 ## Como usar
 
@@ -131,7 +148,7 @@ O módulo pronto está em [`prebuilt/`](prebuilt/) (SHA-256 em `prebuilt/*.sha25
    ```sh
    bash scripts/extrair-fonte.sh /pasta/dos/downloads
    bash scripts/compilar-r8152.sh      # gera build/r8152.ko com a config da TV (diagnostico/config.gz)
-   bash scripts/empacotar-ipk.sh       # gera dist/*.ipk e dist/*.manifest.json
+   bash scripts/empacotar-ipk.sh       # gera dist/*.ipk, dist/*.manifest.json e repo/apps.json
    ```
 
 Detalhes da investigação (diagnóstico da TV, diferenças de configuração, riscos) em
@@ -145,7 +162,7 @@ da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
 | `app/` | App do Homebrew Channel (HTML/JS) e o script `bin/usbeth.sh` |
 | `driver/` | `r8152.c` exatamente como no pacote GPL da LG |
 | `prebuilt/` | `r8152.ko` compilado para `4.4.84` / `lm21u` |
-| `homebrew/` | Arquivo para enviar o app ao repositório oficial do Homebrew Channel |
+| `repo/` | Repositório próprio para o Homebrew Channel (`apps.json`, gerado por `scripts/gerar-indice.sh`) |
 | `scripts/` | Diagnóstico, compilação e empacotamento |
 | `diagnostico/` | Configuração do kernel da TV usada na compilação |
 
@@ -178,9 +195,9 @@ Use at your own risk; other firmwares may differ.
 
 - **Requirements:** rooted TV with Homebrew Channel, platform `lm21u`, kernel `4.4.84-*` (`armv7l`).
   The app checks this and refuses to load elsewhere.
-- **Install:** download the `.ipk` from [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases)
-  and install it with webOS Dev Manager, or over SSH with the `luna-send … appInstallService/dev/install`
-  command shown above.
+- **Install:** in Homebrew Channel go to **Settings → Repositories → Add repository** and enter
+  `https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json` — the app then shows up in the list. Or download the `.ipk` from
+  [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) and install it with webOS Dev Manager.
 - **Use:** open **USB Ethernet (RTL8153)**, press **Load driver now**, check the status, and only then enable
   **Load at TV startup**. A boot-loop guard turns startup loading off if the TV fails to finish booting.
 - **Build it yourself:** see the scripts in `scripts/` and `docs/DESENVOLVIMENTO.md` (Portuguese).
