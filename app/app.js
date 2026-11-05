@@ -6,7 +6,7 @@
   var TEXT = {
     pt: {
       title: 'USB Ethernet (RTL8152/RTL8153)',
-      subtitle: 'Driver r8152 para LG webOS 6 · plataforma lm21u (OLED A1) · experimental',
+      subtitle: 'Driver r8152 para LG webOS 6 · plataforma lm21u · testado no OLED55A1PSA (webOS 6.5.3)',
       status: 'Situação', actions: 'Ações', log: 'Registro',
       load: 'Ativar driver agora', unload: 'Desativar driver',
       autoOn: 'Ativar ao ligar a TV', autoOff: 'Não ativar ao ligar a TV',
@@ -23,7 +23,7 @@
     },
     en: {
       title: 'USB Ethernet (RTL8152/RTL8153)',
-      subtitle: 'r8152 driver for LG webOS 6 · lm21u platform (OLED A1) · experimental',
+      subtitle: 'r8152 driver for LG webOS 6 · lm21u platform · tested on OLED55A1PSA (webOS 6.5.3)',
       status: 'Status', actions: 'Actions', log: 'Log',
       load: 'Load driver now', unload: 'Unload driver',
       autoOn: 'Load at TV startup', autoOff: "Don't load at startup",

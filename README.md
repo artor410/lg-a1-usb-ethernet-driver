@@ -9,12 +9,27 @@ chegar a algo em torno de 300 Mbit/s — útil para Plex, Jellyfin, Moonlight e 
 
 *English summary [below](#english).*
 
+## Testado em
+
+| TV | Firmware / webOS | Adaptador | Resultado |
+|---|---|---|---|
+| OLED55A1PSA (2021) | 03.53.45 / webOS 6.5.3 | Realtek RTL8153 (`0bda:8153`) | ✅ funciona |
+
+- O driver carrega sem erros; a TV configura a rede do adaptador **sozinha** (IP, rota e DNS pelo
+  gerenciador de rede da própria TV) e fica online. Link de 1000 Mbit/s.
+- Download pela internet de até **111 Mbit/s** num único arquivo — acima do máximo da porta interna da TV
+  (~94 Mbit/s na prática). O teto real não foi medido porque a internet e o PC usados no teste ficam
+  perto de 100 Mbit/s.
+- **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
+
+Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
+modelo, firmware e resultado.
+
 > [!WARNING]
-> **Experimental — ainda não testado numa TV.** O módulo foi compilado com o código-fonte GPL que a LG
-> publica para esta TV e passou por todas as conferências possíveis sem carregá-lo (versão, símbolos,
-> configuração do kernel), mas o kernel atual da TV (2025) é mais novo que o código publicado (2021).
-> Se algo interno mudou, carregar o driver pode **travar e reiniciar a TV**. Ela volta ao normal depois de
-> reiniciar: nada é carregado automaticamente a menos que você ligue essa opção. Use por sua conta e risco.
+> Isto carrega um módulo no kernel da TV. Foi compilado com o código-fonte GPL que a LG publica para esta TV
+> e testado no modelo acima, mas outros firmwares podem ter diferenças. Se algo der errado, a TV pode
+> travar e reiniciar; ela volta ao normal, e a ativação automática se desliga sozinha se a TV não terminar
+> de ligar. Use por sua conta e risco.
 
 ## Compatibilidade
 
@@ -61,7 +76,7 @@ Adaptadores **RTL8156 (2.5G)** e **ASIX** não são reconhecidos por este driver
    **b) Pelo SSH** (TV com root):
 
    ```sh
-   scp io.github.artor410.lgusbethernet_0.1.0_all.ipk root@IP_DA_TV:/tmp/app.ipk
+   scp io.github.artor410.lgusbethernet_<versão>_all.ipk root@IP_DA_TV:/tmp/app.ipk
    ssh root@IP_DA_TV
    luna-send -n 6 luna://com.webos.appInstallService/dev/install \
      '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
@@ -149,10 +164,10 @@ da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
 **r8152 driver for Realtek RTL8152/RTL8153 USB Ethernet adapters on LG webOS 6 TVs with the `lm21u`
 platform (e.g. OLED A1, 2021), plus a Homebrew Channel app to load it with the remote.**
 
-> [!WARNING]
-> **Experimental — not yet tested on a TV.** Built from LG's published GPL kernel source with the TV's exact
-> kernel config; version magic and all imported symbols match, but the TV's kernel (2025) is newer than the
-> published source (2021). Loading it might crash and reboot the TV. Nothing loads at boot unless you enable it.
+**Tested on OLED55A1PSA (firmware 03.53.45, webOS 6.5.3) with an RTL8153 adapter:** the driver loads
+cleanly, the TV's own network manager configures the adapter automatically (DHCP, route, DNS), 1 Gbit/s link,
+up to 111 Mbit/s measured (test setup capped near 100), and loading at startup works after a reboot.
+Use at your own risk; other firmwares may differ.
 
 - **Requirements:** rooted TV with Homebrew Channel, platform `lm21u`, kernel `4.4.84-*` (`armv7l`).
   The app checks this and refuses to load elsewhere.

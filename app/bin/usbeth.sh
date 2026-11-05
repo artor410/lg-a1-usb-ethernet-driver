@@ -22,7 +22,8 @@ IDS="0bda:8050 0bda:8152 0bda:8153 045e:07ab 045e:07c6 04e8:a101 17ef:304f 17ef:
 
 log() {
     mkdir -p "$STATE"
-    echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"
+    # No boot o relógio ainda não foi acertado; o tempo desde a inicialização ajuda a ler o log.
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [up $(cut -d' ' -f1 /proc/uptime)s] $*" >> "$LOG"
     if [ "$(wc -l < "$LOG")" -gt 400 ]; then
         tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
     fi

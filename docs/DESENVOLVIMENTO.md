@@ -92,3 +92,18 @@ pwsh -File scripts\identificar-adaptador.ps1
 - `scripts/coletar-info-tv.sh` — diagnóstico, roda na TV (só leitura).
 - `scripts/identificar-adaptador.ps1` — identifica o chip do adaptador no Windows.
 - `diagnostico/` — relatórios trazidos da TV.
+
+## Teste na TV (05/11/2026, OLED55A1PSA, firmware 03.53.45, webOS 6.5.3)
+- `insmod` sem erros: `r8152 1-1:1.0 eth1: v1.08.2`. O driver troca o adaptador da configuração USB 2
+  (CDC genérico) para a 1 (fornecedor), como esperado.
+- Com o cabo no adaptador, o connman da TV cria sozinho o serviço `ethernet_<mac>_cable`, pega IP por DHCP,
+  define a rota padrão e o DNS; `connmanctl state` = `online`. Nenhuma configuração extra foi necessária.
+- Link 1000 Mbit/s. Download (Cloudflare, 50 MB): 111 Mbit/s num fluxo; 98 Mbit/s com 4 fluxos.
+  TV → PC na rede local: 94 Mbit/s, mas a placa do PC estava a 100 Mbit/s (o limite era o PC).
+  Por SSH ~90 Mbit/s (limitado pela criptografia no processador da TV).
+- `rx_dropped` sobe com o tempo (pacotes que a TV descarta, como multicast/IPv6); `rx_errors` = 0.
+- Ativação ao ligar: script em `/var/lib/webosbrew/init.d/60-lg-a1-usb-ethernet`; após `reboot`, o driver
+  carregou ~40 s depois de ligar e a rede voltou sozinha. O arquivo de proteção `boot-pending` foi apagado
+  ~2 min depois, como previsto.
+- Pacote `.ipk`: o verificador da LG recusa o formato `ar` do GNU binutils (nomes com `/` no fim);
+  `scripts/empacotar-ipk.sh` gera o formato clássico do `dpkg-deb`, que instala normalmente.
