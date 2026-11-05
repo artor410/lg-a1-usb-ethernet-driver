@@ -1,0 +1,12 @@
+{
+  "id": "io.github.artor410.lgusbethernet",
+  "version": "0.1.0",
+  "vendor": "artor410",
+  "type": "web",
+  "main": "index.html",
+  "title": "USB Ethernet (RTL8153)",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#111418",
+  "resolution": "1920x1080"
+}

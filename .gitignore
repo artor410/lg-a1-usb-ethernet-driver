@@ -1,0 +1,8 @@
+# Saídas locais
+build/
+dist/
+# Relatório do diagnóstico tem MACs e dados da TV de quem rodou
+diagnostico/lg-ethernet-info.txt
+
+# Clone vazio antigo do repositório (não faz parte do projeto)
+lg-a1-usb-ethernet-driver/
