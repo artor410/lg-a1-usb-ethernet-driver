@@ -148,6 +148,12 @@ da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
 | `scripts/` | Diagnóstico, compilação e empacotamento |
 | `diagnostico/` | Configuração do kernel da TV usada na compilação |
 
+## Uso de IA
+
+O driver foi compilado, e o app e os scripts foram escritos, por um agente de IA (Claude Code) sob a
+direção do mantenedor, que acompanhou e conduziu os testes na própria TV (OLED55A1PSA) e é responsável
+pelo projeto. O código do driver em si é o `r8152` original da Realtek/LG, sem alterações.
+
 ## Licença e créditos
 
 - GPL-2.0 (veja [`LICENSE`](LICENSE)). O driver `r8152` é © Realtek Semiconductor, distribuído pela LG no
