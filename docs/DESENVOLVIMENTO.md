@@ -107,3 +107,15 @@ pwsh -File scripts\identificar-adaptador.ps1
   ~2 min depois, como previsto.
 - Pacote `.ipk`: o verificador da LG recusa o formato `ar` do GNU binutils (nomes com `/` no fim);
   `scripts/empacotar-ipk.sh` gera o formato clássico do `dpkg-deb`, que instala normalmente.
+
+## Velocidade e buffers de recepção (05/11/2026, v0.3.0)
+Medido com `scripts/teste-velocidade.sh` e testes na rede local (PC a 1 Gbit/s, servidor HTTP no PC):
+- Nenhum núcleo da TV passa de ~36% durante os downloads: a CPU não é o gargalo. O RPS ajudou pouco.
+- Enviando (TV → PC, `nc`): ~251 Mbit/s. Recebendo (PC → TV, HTTP): ~152 Mbit/s com o driver original,
+  com ~17.700 segmentos TCP fora de ordem a cada 300 MB — perda dentro do adaptador, antes do kernel
+  (`rx_dropped` do driver quase não muda).
+- Variantes testadas (troca do módulo com volta automática ao original se a rede não voltasse):
+  32 × 16 KB: 155–159 Mbit/s; 10 × 32 KB: 202–212; **32 × 32 KB: 214–215** (fora de ordem ~600).
+  O ganho vem do tamanho do buffer; 32 KB é o tamanho que o r8152 do Linux oficial usa para o RTL8153.
+- Virou `driver/patches/0001-rx-buffers-32x32k.patch`, aplicado por `scripts/compilar-r8152.sh`.
+- `speed.cloudflare.com` passa a recusar (HTTP 429) depois de muitos downloads seguidos do mesmo IP.

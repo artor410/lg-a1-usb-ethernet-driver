@@ -1,0 +1,35 @@
+Aumenta os buffers de recepção USB do r8152 (RTL8153 em USB 2.0).
+
+Com 10 buffers de 16 KB, a TV LG lm21u (EHCI MStar) não esvazia a fila interna do
+adaptador rápido o bastante: há perda de pacotes antes do kernel (~17.700 segmentos
+TCP fora de ordem a cada 300 MB) e a recepção fica em ~152 Mbit/s na rede local.
+Com 32 buffers de 32 KB (o mesmo tamanho de buffer de recepção que o r8152 do Linux
+oficial usa para o RTL8153), a recepção vai a ~215 Mbit/s e os fora de ordem caem
+para ~600. O tamanho é repassado ao chip por r8153_set_rx_early_size().
+
+Medido em 05/11/2026 numa OLED55A1PSA (webOS 6.5.3), PC -> TV por HTTP, 300 MB:
+  original (10 x 16 KB)  152-153 Mbit/s
+  32 x 16 KB             155-159 Mbit/s
+  10 x 32 KB             202-212 Mbit/s
+  32 x 32 KB             214-215 Mbit/s   <- este patch
+
+--- a/r8152.c
++++ b/r8152.c
+@@ -463,7 +463,7 @@
+ };
+ 
+ #define RTL8152_MAX_TX		4
+-#define RTL8152_MAX_RX		10
++#define RTL8152_MAX_RX		32
+ #define INTBUFSIZE		2
+ #define CRC_SIZE		4
+ #define TX_ALIGN		4
+@@ -654,7 +654,7 @@
+  * The RTL chips use a 64 element hash table based on the Ethernet CRC.
+  */
+ static const int multicast_filter_limit = 32;
+-static unsigned int agg_buf_sz = 16384;
++static unsigned int agg_buf_sz = 32768;
+ 
+ #define RTL_LIMITED_TSO_SIZE	(agg_buf_sz - sizeof(struct tx_desc) - \
+ 				 VLAN_ETH_HLEN - VLAN_HLEN)

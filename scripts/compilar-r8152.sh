@@ -41,6 +41,11 @@ grep -Fqx '#define UTS_RELEASE "4.4.84"' "$OUT/include/generated/utsrelease.h" |
 # 3. Compilar só o r8152 (driver/r8152.c = drivers/net/usb/r8152.c do pacote da LG).
 rm -rf "$MOD"; mkdir -p "$MOD"
 cp "$PROJETO/driver/r8152.c" "$MOD/"   # cópia do r8152.c da árvore da LG
+for p in "$PROJETO"/driver/patches/*.patch; do   # ajustes do projeto (ver cabeçalho de cada patch)
+    [[ -e $p ]] || continue
+    echo "Aplicando $(basename "$p")"
+    patch -s -d "$MOD" -p1 < "$p"
+done
 echo 'obj-m := r8152.o' > "$MOD/Makefile"
 make -C "$KSRC" "${ARGS[@]}" M="$MOD" modules
 

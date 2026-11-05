@@ -5,8 +5,8 @@ da plataforma **lm21u** (ex.: **OLED A1**, 2021), com um app para o **Homebrew C
 com o controle remoto.
 
 A porta de rede das TVs LG é de 100 Mbit/s. Com um adaptador gigabit na porta USB (2.0) a TV passa desse
-limite — medimos 111 Mbit/s, com o teste limitado pela internet e pelo PC — útil para Plex, Jellyfin,
-Moonlight e afins.
+limite: na rede local medimos **~215 Mbit/s recebendo** e **~250 Mbit/s enviando** — útil para Plex,
+Jellyfin, Moonlight e afins.
 
 *English summary [below](#english).*
 
@@ -18,9 +18,11 @@ Moonlight e afins.
 
 - O driver carrega sem erros; a TV configura a rede do adaptador **sozinha** (IP, rota e DNS pelo
   gerenciador de rede da própria TV) e fica online. Link de 1000 Mbit/s.
-- Download pela internet de até **111 Mbit/s** num único arquivo — acima do máximo da porta interna da TV
-  (~94 Mbit/s na prática). O teto real não foi medido porque a internet e o PC usados no teste ficam
-  perto de 100 Mbit/s.
+- Rede local (PC com 1 Gbit/s): **~215 Mbit/s** recebendo e **~250 Mbit/s** enviando, contra ~94 Mbit/s
+  da porta interna da TV. A partir da v0.3.0 o driver usa buffers de recepção maiores
+  ([`driver/patches/`](driver/patches/)); com os buffers originais a recepção ficava em ~152 Mbit/s.
+- Pela internet a velocidade depende também do servidor e da distância; num teste de navegador como o
+  fast.com o próprio navegador da TV pesa no resultado.
 - **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
 
 Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
@@ -160,7 +162,7 @@ da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
 | Pasta | Conteúdo |
 |---|---|
 | `app/` | App do Homebrew Channel (HTML/JS) e o script `bin/usbeth.sh` |
-| `driver/` | `r8152.c` exatamente como no pacote GPL da LG |
+| `driver/` | `r8152.c` exatamente como no pacote GPL da LG + `patches/` aplicados na compilação |
 | `prebuilt/` | `r8152.ko` compilado para `4.4.84` / `lm21u` |
 | `repo/` | Repositório próprio para o Homebrew Channel (`apps.json`, gerado por `scripts/gerar-indice.sh`) |
 | `scripts/` | Diagnóstico, compilação e empacotamento |
@@ -170,7 +172,8 @@ da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
 
 O driver foi compilado, e o app e os scripts foram escritos, por um agente de IA (Claude Code) sob a
 direção do mantenedor, que acompanhou e conduziu os testes na própria TV (OLED55A1PSA) e é responsável
-pelo projeto. O código do driver em si é o `r8152` original da Realtek/LG, sem alterações.
+pelo projeto. O código do driver é o `r8152` original da Realtek/LG; a única mudança é o patch de tamanho dos buffers
+em `driver/patches/`, com as medidas que o justificam.
 
 ## Licença e créditos
 
@@ -190,7 +193,8 @@ platform (e.g. OLED A1, 2021), plus a Homebrew Channel app to load it with the r
 
 **Tested on OLED55A1PSA (firmware 03.53.45, webOS 6.5.3) with an RTL8153 adapter:** the driver loads
 cleanly, the TV's own network manager configures the adapter automatically (DHCP, route, DNS), 1 Gbit/s link,
-up to 111 Mbit/s measured (test setup capped near 100), and loading at startup works after a reboot.
+~215 Mbit/s receive / ~250 Mbit/s send on the LAN (vs ~94 on the built-in port), and loading at startup works
+after a reboot. Since v0.3.0 the driver uses larger USB receive buffers (see `driver/patches/`).
 Use at your own risk; other firmwares may differ.
 
 - **Requirements:** rooted TV with Homebrew Channel, platform `lm21u`, kernel `4.4.84-*` (`armv7l`).
