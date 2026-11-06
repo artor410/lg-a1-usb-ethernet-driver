@@ -1,20 +1,24 @@
 #!/bin/sh
-# lg-a1-usb-ethernet: controla o driver r8152 (RTL8152/RTL8153) na TV.
-# Roda como root (chamado pelo app via Homebrew Channel, ou pelo SSH).
+# webOS6-usbrealtek-driver: controls the r8152 driver (RTL8152/RTL8153) on the TV.
+# Runs as root (called by the app through Homebrew Channel, or over SSH).
 #
-# Uso: usbeth.sh status | load | unload | autostart-on | autostart-off
+# Usage: usbeth.sh status | load | unload | autostart-on | autostart-off
 #                | primary-on | primary-off | wififb-on | wififb-off | speedtest | boot | log
 #
-# Só funciona no kernel para o qual o módulo foi compilado:
-# LG webOS 6, plataforma lm21u (ex.: OLED A1), kernel 4.4.84, ARMv7.
+# Only works on the kernel the module was built for:
+# LG webOS 6, lm21u platform (e.g. OLED A1), kernel 4.4.84, ARMv7.
 #
-# "primary": o webOS só considera conectada a interface eth0. Com primary ligado,
-# o adaptador vira eth0 e a porta própria da TV fica como eth2; um vigia refaz a
-# troca depois do modo de espera e devolve eth0 à porta própria se o adaptador sair.
-# "wififb" (Wi-Fi de reserva): se o cabo do adaptador ficar 60 s sem sinal, liga o Wi-Fi
-# pelo gerenciador do webOS; desliga de novo quando o cabo volta por 30 s.
-# A troca de nomes, a recuperação após a troca e o Wi-Fi de reserva foram adaptados do LG-USB-2-ETH0 (MIT, Copyright (c) 2025 OhMyBahGosh,
-# github.com/ohmybahgosh/LG-USB-2-ETH0, commit 3ec818a81ea7) — ver THIRD_PARTY.md.
+# "primary": webOS only treats eth0 as the wired connection. With primary on, the
+# adapter becomes eth0 and the TV's built-in port is parked as eth2; a watcher redoes
+# the swap after standby and gives eth0 back to the built-in port if the adapter goes away.
+# "wififb" (Wi-Fi fallback): if the adapter's cable has no link for 60 s, Wi-Fi is turned
+# on through webOS's connection manager, and off again once the cable is back for 30 s.
+# The interface swap, the recovery after the swap and the Wi-Fi fallback are adapted from
+# LG-USB-2-ETH0 (MIT, Copyright (c) 2025 OhMyBahGosh, github.com/ohmybahgosh/LG-USB-2-ETH0,
+# commit 3ec818a81ea7); see THIRD_PARTY.md.
+#
+# Internal names (state directory, init.d hook) keep the project's original name
+# "lg-a1-usb-ethernet" so existing installs keep their settings across updates.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 DIR=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,13 +38,13 @@ INITD=/var/lib/webosbrew/init.d/60-lg-a1-usb-ethernet
 NET=/sys/class/net
 PARK_NAME=eth2
 
-# Adaptadores reconhecidos por este r8152 (tabela do driver da LG, kernel 4.4.84)
+# Adapters this r8152 recognizes (the device table of LG's driver, kernel 4.4.84)
 IDS="0bda:8050 0bda:8152 0bda:8153 045e:07ab 045e:07c6 04e8:a101 17ef:304f 17ef:3062
 17ef:3069 17ef:7205 17ef:720c 17ef:7214 13b1:0041 0955:09ff 2357:0601"
 
 log() {
     mkdir -p "$STATE"
-    # No boot o relógio ainda não foi acertado; o tempo desde a inicialização ajuda a ler o log.
+    # At boot the clock is not set yet; the uptime makes the log readable.
     echo "$(date '+%Y-%m-%d %H:%M:%S') [up $(cut -d' ' -f1 /proc/uptime)s] $*" >> "$LOG"
     if [ "$(wc -l < "$LOG")" -gt 400 ]; then
         tail -n 200 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
@@ -67,7 +71,7 @@ check_compat() {
 
 module_loaded() { grep -q "^$MOD " /proc/modules; }
 
-# Imprime "caminho_sysfs vid:pid nome" do primeiro adaptador suportado encontrado.
+# Prints "sysfs_path vid:pid name" of the first supported adapter found.
 find_adapter() {
     for d in /sys/bus/usb/devices/*; do
         [ -r "$d/idVendor" ] || continue
@@ -86,22 +90,22 @@ adapter_iface() {
     ls -d "$1"/*/net/* 2>/dev/null | head -n 1 | xargs -r basename
 }
 
-# ---------- Troca de nomes (adaptador como eth0) ----------
+# ---------- Interface swap (adapter as eth0) ----------
 
 sysval() { [ -r "$1" ] && IFS= read -r _v < "$1" 2>/dev/null && printf '%s\n' "$_v"; }
 nic_driver() { _l=$(readlink "$NET/$1/device/driver" 2>/dev/null) && echo "${_l##*/}"; }
 is_wifi() { [ -d "$NET/$1/wireless" ] || [ -e "$NET/$1/phy80211" ]; }
 
-# O adaptador: interface cabeada controlada por este r8152.
+# The adapter: a wired interface driven by this r8152.
 is_usb_nic() {
     [ -e "$NET/$1/device" ] && [ "$(sysval "$NET/$1/type")" = 1 ] || return 1
     is_wifi "$1" && return 1
     [ "$(nic_driver "$1")" = "$MOD" ]
 }
 
-# A porta própria da TV. Na MStar do A1 ela é um dispositivo "virtual"
-# (/sys/devices/virtual/net/eth0, sem link "device"), então não dá para usar o
-# critério do LG-USB-2-ETH0. Depois da primeira troca, reconhece pelo MAC salvo.
+# The TV's built-in port. On the A1's MStar SoC it is a "virtual" device
+# (/sys/devices/virtual/net/eth0, no "device" link), so LG-USB-2-ETH0's check does
+# not work here. After the first swap it is recognized by its saved MAC address.
 BUILTIN_MAC="$STATE/builtin_mac"
 is_builtin_nic() {
     [ -e "$NET/$1" ] && [ "$(sysval "$NET/$1/type")" = 1 ] || return 1
@@ -134,8 +138,8 @@ free_eth_name() {
     return 1
 }
 
-# Renomeia uma interface. Ela precisa estar parada, e o gerenciador de rede do webOS
-# às vezes a religa na hora ("Device or resource busy"), então tenta de novo.
+# Renames an interface. It has to be down first, and webOS's connection manager
+# sometimes brings it straight back up ("Device or resource busy"), so retry.
 rename_if() {
     _try=1
     while :; do
@@ -151,8 +155,8 @@ rename_if() {
     return 1
 }
 
-# Adaptador vira eth0; a porta própria fica estacionada como eth2.
-# Se um passo falhar, devolve os nomes antigos: a TV nunca fica sem eth0.
+# The adapter becomes eth0; the built-in port is parked as eth2.
+# If a step fails, the old names are put back: the TV never ends up without eth0.
 swap_in() {
     _usb=$(find_usb_nic)
     [ -n "$_usb" ] || return 2
@@ -184,8 +188,8 @@ swap_in() {
     ip link set dev eth0 up
     [ -n "$_park" ] && ip link set dev "$_park" up
     say "adapter is now eth0${_park:+ (built-in port parked as $_park)}"
-    # Recuperação: se o adaptador tinha IP antes e o eth0 não pega IP depois da troca,
-    # religa o link; se ainda assim não vier, desfaz a troca até o próximo boot.
+    # Recovery: if the adapter had an address before and eth0 gets none after the swap,
+    # take the link down and up; if that does not help, undo the swap until the next boot.
     [ -n "$_hadip" ] || return 0
     wait_ipv4 eth0 20 && return 0
     say "eth0 has no address 20 s after the swap: taking the link down and up"
@@ -201,7 +205,7 @@ swap_in() {
 
 has_ipv4() { ip -4 addr show dev "$1" 2>/dev/null | grep -q 'inet '; }
 
-# wait_ipv4 IFACE SEGUNDOS
+# wait_ipv4 IFACE SECONDS
 wait_ipv4() {
     _n=0
     while [ "$_n" -lt "$2" ]; do
@@ -212,7 +216,7 @@ wait_ipv4() {
     has_ipv4 "$1"
 }
 
-# Devolve eth0 à porta própria; o adaptador (se houver) fica com o primeiro ethN livre.
+# Gives eth0 back to the built-in port; the adapter (if any) gets the first free ethN.
 swap_out() {
     _bi=$(find_builtin_nic)
     [ -n "$_bi" ] || return 2
@@ -257,9 +261,9 @@ stop_watcher() {
     rm -f "$WATCH_PID"
 }
 
-# Vigia: a cada 5 s confere os nomes. Depois do modo de espera a TV reinicia as
-# portas USB e o adaptador volta como eth1; se o adaptador sair, eth0 volta à
-# porta própria. Só lê alguns arquivos de /sys, quase não custa nada.
+# Watcher: checks the names every 5 s. After standby the TV resets its USB ports
+# and the adapter comes back as eth1; if the adapter goes away, eth0 goes back to
+# the built-in port. It only reads a few /sys files, so it costs next to nothing.
 want_watcher() { [ -e "$PRIMARY" ] || [ -e "$WIFIFB" ]; }
 
 cmd_watch() {
@@ -295,9 +299,9 @@ cmd_watch() {
     log "watcher stopped"
 }
 
-# ---------- Wi-Fi de reserva ----------
-# Liga/desliga o Wi-Fi pelo gerenciador do webOS (o mesmo botão das Configurações).
-# Só funciona no contexto do Homebrew Channel (app/boot).
+# ---------- Wi-Fi fallback ----------
+# Turns Wi-Fi on/off through webOS's connection manager (the same switch as in Settings).
+# Only works in the Homebrew Channel context (app/boot).
 wifi_status() {
     _ws=$(luna-send -n 1 -w 3000 luna://com.webos.service.wifi/getstatus '{}' 2>/dev/null)
     case "$_ws" in
@@ -314,7 +318,7 @@ wifi_set() {
 }
 
 wifi_fallback() {
-    [ "$(wifi_status)" = disabled ] || return 0   # já ligado (ou sem resposta): não mexe
+    [ "$(wifi_status)" = disabled ] || return 0   # already on (or no answer): leave it alone
     if wifi_set enabled; then
         echo on > "$WIFI_MARK"
         say "adapter cable without link for 60 s: Wi-Fi turned on"
@@ -343,7 +347,7 @@ cmd_wififb_off() {
     say "Wi-Fi fallback disabled"
 }
 
-# ---------- Teste de velocidade ----------
+# ---------- Speed test ----------
 cmd_speedtest() {
     _if=$(ip route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
     _r=$(LC_ALL=C curl -s -o /dev/null --max-time 40 -w '%{http_code} %{size_download} %{time_total}' \
@@ -379,11 +383,11 @@ cmd_primary_off() {
     return 0
 }
 
-# Estado da conexão cabeada segundo o webOS (o que as Configurações e os apps veem).
-# Só responde no contexto do Homebrew Channel (app/boot); pelo SSH sem terminal fica vazio.
+# The wired connection state according to webOS (what Settings and apps see).
+# Only answers in the Homebrew Channel context (app/boot); empty over SSH without a terminal.
 webos_wired() {
     _o=$(luna-send -n 1 -w 3000 luna://com.webos.service.connectionmanager/getStatus '{}' 2>/dev/null)
-    # "wired" tem sub-objetos (proxyinfo); tira os {...} internos antes de extrair.
+    # "wired" has nested objects (proxyinfo): strip the inner {...} before extracting.
     _w=$(echo "$_o" | sed -e 's/.*"wired":{//' -e ':a' -e 's/{[^{}]*}//' -e 'ta' -e 's/}.*//')
     echo "$_w" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p'
 }
@@ -442,14 +446,14 @@ cmd_load() {
     sleep 3
     dmesg | grep -iE 'r8152|rtl815|usb 1-' | tail -n 10 | while read -r l; do log "dmesg: $l"; done
     a=$(find_adapter) && say "adapter: $(echo "$a" | cut -d' ' -f2-) iface=$(adapter_iface "$(echo "$a" | cut -d' ' -f1)")"
-    want_watcher && start_watcher   # o vigia faz a troca para eth0 e cuida do Wi-Fi de reserva
+    want_watcher && start_watcher   # the watcher does the eth0 swap and the Wi-Fi fallback
     return 0
 }
 
 cmd_unload() {
     if ! module_loaded; then say "driver not loaded"; return 0; fi
     stop_watcher
-    is_usb_nic eth0 && swap_out   # devolve eth0 à porta própria antes de o adaptador sumir
+    is_usb_nic eth0 && swap_out   # give eth0 back to the built-in port before the adapter goes away
     if out=$(rmmod "$MOD" 2>&1); then say "driver unloaded"; else say "rmmod failed: $out"; exit 1; fi
 }
 
@@ -458,7 +462,7 @@ cmd_autostart_on() {
     mkdir -p "$(dirname "$INITD")"
     cat > "$INITD" <<EOF
 #!/bin/sh
-# Created by lg-a1-usb-ethernet: loads the USB-Ethernet driver at boot.
+# Created by webOS6-usbrealtek-driver: loads the USB Ethernet driver at boot.
 [ -r "$DIR/bin/usbeth.sh" ] || { rm -f "$INITD"; exit 0; }
 sh "$DIR/bin/usbeth.sh" boot
 EOF
@@ -472,8 +476,8 @@ cmd_autostart_off() {
     say "autostart disabled"
 }
 
-# Chamado no boot pelo script em init.d. Se o boot anterior não terminou depois
-# de carregar o driver (TV travou/reiniciou), desliga o autostart por segurança.
+# Called at boot by the init.d hook. If the previous boot did not finish after loading
+# the driver (the TV froze or restarted), startup loading is turned off for safety.
 cmd_boot() {
     mkdir -p "$STATE"
     if [ -e "$GUARD" ]; then
@@ -483,8 +487,8 @@ cmd_boot() {
         exit 1
     fi
     touch "$GUARD"; sync
-    # O resto roda em segundo plano: o boot (e o temporizador do modo de segurança do
-    # Homebrew Channel) não espera o driver carregar.
+    # The rest runs in the background, so the boot (and Homebrew Channel's failsafe
+    # timer) does not wait for the driver to load.
     nohup sh "$SELF" boot-worker > /dev/null 2>&1 &
 }
 
@@ -493,7 +497,7 @@ cmd_boot_worker() {
         sleep 120
         rm -f "$GUARD"; sync
     else
-        rm -f "$GUARD"   # falhou sem travar: não é motivo para desligar o autostart
+        rm -f "$GUARD"   # failed without freezing: no reason to turn startup loading off
     fi
 }
 

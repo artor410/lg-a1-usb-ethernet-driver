@@ -1,8 +1,7 @@
-# Saídas locais
+# Local build outputs
 build/
 dist/
-# Relatório do diagnóstico tem MACs e dados da TV de quem rodou
-diagnostico/lg-ethernet-info.txt
-
-# Clone vazio antigo do repositório (não faz parte do projeto)
+# The TV info report contains MAC addresses and details of whoever ran it
+diagnostics/tv-info.txt
+# Old empty clone of the repository (not part of the project)
 lg-a1-usb-ethernet-driver/

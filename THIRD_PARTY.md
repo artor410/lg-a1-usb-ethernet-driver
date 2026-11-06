@@ -1,10 +1,11 @@
-# Código de terceiros
+# Third-party code
 
 ## LG-USB-2-ETH0
 
-A troca de nomes de interface em `app/bin/usbeth.sh` (`rename_if`, `swap_in`, `swap_out`, `free_eth_name` e
-a ideia do vigia) foi adaptada de [LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0), commit
-`3ec818a81ea7`. A detecção da porta própria foi reescrita para o A1, onde ela é um dispositivo virtual.
+The interface swap in `app/bin/usbeth.sh` (`rename_if`, `swap_in`, `swap_out`, `free_eth_name`), the watcher
+idea, the recovery after the swap and the Wi-Fi fallback are adapted from
+[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0), commit `3ec818a81ea7`. Detection of the
+built-in port was rewritten for the A1, where it is a virtual device.
 
 ```
 MIT License
@@ -32,4 +33,4 @@ SOFTWARE.
 
 ## Realtek r8152
 
-`driver/r8152.c` é o driver da Realtek distribuído pela LG no pacote de código aberto da TV (GPL-2.0).
+`driver/r8152.c` is Realtek's driver as distributed by LG in the TV's open source package (GPL-2.0).

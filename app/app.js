@@ -1,65 +1,36 @@
-/* lg-a1-usb-ethernet: interface do app. Roda comandos como root pelo serviço
- * do Homebrew Channel (luna://org.webosbrew.hbchannel.service/exec). */
+/* webOS6-usbrealtek-driver: the app's UI. Runs commands as root through the
+ * Homebrew Channel service (luna://org.webosbrew.hbchannel.service/exec). */
 (function () {
   'use strict';
 
-  var TEXT = {
-    pt: {
-      title: 'USB Ethernet (RTL8152/RTL8153)',
-      subtitle: 'Driver r8152 para LG webOS 6 · plataforma lm21u · testado no OLED55A1PSA (webOS 6.5.3)',
-      status: 'Situação', actions: 'Ações', log: 'Registro',
-      load: 'Ativar driver agora', unload: 'Desativar driver',
-      autoOn: 'Ativar ao ligar a TV', autoOff: 'Não ativar ao ligar a TV',
-      refresh: 'Atualizar',
-      primaryOn: 'Usar adaptador como principal', primaryOff: 'Usar porta da TV como principal',
-      primaryRow: 'Conexão principal (eth0)', webosRow: 'Cabo no webOS',
-      adapterName: 'adaptador', builtinName: 'porta da TV', noneName: 'nenhuma',
-      wifiOn: 'Ligar Wi-Fi de reserva', wifiOff: 'Desligar Wi-Fi de reserva', speed: 'Testar velocidade',
-      tv: 'TV', wifiRow: 'Wi-Fi de reserva', speedRow: 'Última velocidade',
-      on: 'ligado', off: 'desligado', wifiActive: 'ligado — Wi-Fi em uso agora (cabo sem sinal)',
-      noswap: 'troca desfeita: o eth0 não pegou IP (até reiniciar a TV)',
-      hint: '"Usar adaptador como principal" faz o webOS e os apps verem o cabo como conectado. O Wi-Fi de reserva liga o Wi-Fi se o cabo ficar 1 minuto sem sinal.',
-      compat: 'Compatibilidade', kernel: 'Kernel', platform: 'Plataforma', webos: 'webOS',
-      adapter: 'Adaptador', driver: 'Driver em uso', iface: 'Interface de rede',
-      module: 'Driver r8152', autostart: 'Ativar ao ligar', route: 'Rota padrão',
-      yes: 'sim', no: 'não', loaded: 'carregado', notLoaded: 'não carregado',
-      none: 'nenhum adaptador compatível conectado', compatOk: 'compatível',
-      guard: 'desligado por segurança (a TV reiniciou depois de carregar o driver)',
-      noRoot: 'Não foi possível falar com o Homebrew Channel. A TV precisa estar com root.',
-      running: 'Executando: ', done: 'Concluído.', failed: 'Falhou: '
-    },
-    en: {
-      title: 'USB Ethernet (RTL8152/RTL8153)',
-      subtitle: 'r8152 driver for LG webOS 6 · lm21u platform · tested on OLED55A1PSA (webOS 6.5.3)',
-      status: 'Status', actions: 'Actions', log: 'Log',
-      load: 'Load driver now', unload: 'Unload driver',
-      autoOn: 'Load at TV startup', autoOff: "Don't load at startup",
-      refresh: 'Refresh',
-      primaryOn: 'Use adapter as main', primaryOff: 'Use TV port as main',
-      primaryRow: 'Main connection (eth0)', webosRow: 'Cable in webOS',
-      adapterName: 'adapter', builtinName: 'TV port', noneName: 'none',
-      wifiOn: 'Enable Wi-Fi fallback', wifiOff: 'Disable Wi-Fi fallback', speed: 'Test speed',
-      tv: 'TV', wifiRow: 'Wi-Fi fallback', speedRow: 'Last speed',
-      on: 'on', off: 'off', wifiActive: 'on — Wi-Fi in use now (no cable link)',
-      noswap: 'swap undone: eth0 got no address (until the TV restarts)',
-      hint: '"Use adapter as main" makes webOS and apps see the cable as connected. Wi-Fi fallback turns Wi-Fi on if the cable has no link for 1 minute.',
-      compat: 'Compatibility', kernel: 'Kernel', platform: 'Platform', webos: 'webOS',
-      adapter: 'Adapter', driver: 'Bound driver', iface: 'Network interface',
-      module: 'r8152 driver', autostart: 'Load at startup', route: 'Default route',
-      yes: 'yes', no: 'no', loaded: 'loaded', notLoaded: 'not loaded',
-      none: 'no supported adapter connected', compatOk: 'supported',
-      guard: 'turned off for safety (the TV restarted after loading the driver)',
-      noRoot: 'Could not reach Homebrew Channel. The TV must be rooted.',
-      running: 'Running: ', done: 'Done.', failed: 'Failed: '
-    }
+  var T = {
+    title: 'USB Ethernet (RTL8152/RTL8153)',
+    subtitle: 'r8152 driver for LG webOS 6 · lm21u platform · tested on OLED55A1PSA (webOS 6.5.3)',
+    status: 'Status', actions: 'Actions', log: 'Log',
+    load: 'Load driver now', unload: 'Unload driver',
+    autoOn: 'Load at TV startup', autoOff: "Don't load at startup",
+    primaryOn: 'Use adapter as main', primaryOff: 'Use TV port as main',
+    wifiOn: 'Enable Wi-Fi fallback', wifiOff: 'Disable Wi-Fi fallback', speed: 'Test speed',
+    hint: '"Use adapter as main" makes webOS and apps see the cable as connected. Wi-Fi fallback turns Wi-Fi on if the cable has no link for 1 minute. Status refreshes by itself.',
+    compat: 'Compatibility', tv: 'TV', kernel: 'Kernel', adapter: 'Adapter', module: 'r8152 driver',
+    iface: 'Network interface', primaryRow: 'Main connection (eth0)', webosRow: 'Cable in webOS',
+    wifiRow: 'Wi-Fi fallback', speedRow: 'Last speed', autostart: 'Load at startup', route: 'Default route',
+    adapterName: 'adapter', builtinName: 'TV port', noneName: 'none',
+    yes: 'yes', no: 'no', on: 'on', off: 'off', loaded: 'loaded', notLoaded: 'not loaded',
+    none: 'no supported adapter connected', compatOk: 'supported',
+    wifiActive: 'on — Wi-Fi in use now (no cable link)',
+    noswap: 'swap undone: eth0 got no address (until the TV restarts)',
+    guard: 'turned off for safety (the TV restarted after loading the driver)',
+    noRoot: 'Could not reach Homebrew Channel. The TV must be rooted.',
+    running: 'Running: ', done: 'Done.', failed: 'Failed: '
   };
-  var lang = (navigator.language || 'en').toLowerCase().indexOf('pt') === 0 ? 'pt' : 'en';
-  var T = TEXT[lang];
 
+  var REFRESH_MS = 10000;   // automatic status refresh while the app is visible
   var appDir = decodeURIComponent(location.pathname).replace(/\/[^/]*$/, '');
   var script = appDir + '/bin/usbeth.sh';
   var bridges = [];
-  var busy = false;
+  var busy = false;         // an action (button) is running
+  var refreshing = false;   // a status refresh is running
   var lastStatus = {};
 
   function $(id) { return document.getElementById(id); }
@@ -69,7 +40,7 @@
     for (var i = 0; i < els.length; i++) els[i].textContent = T[els[i].getAttribute('data-t')];
   }
 
-  // Modo demonstração (fora da TV): abra index.html?demo no navegador.
+  // Demo mode (outside the TV): open index.html?demo in a browser.
   var DEMO = typeof PalmServiceBridge === 'undefined' && /[?&]demo\b/.test(location.search);
   var demoStatus = 'compat=ok\nkernel=4.4.84-899.19.koli.1\nplatform=lm21u\nwebos=6.5.3\n' +
     'adapter=0bda:8153 Realtek USB 10/100/1000 LAN\nadapter_driver=r8152\nadapter_config=1\niface=eth0\n' +
@@ -83,7 +54,7 @@
       if (DEMO) return resolve({ stdoutString: /status/.test(params.command) ? demoStatus : 'demo\n' });
       if (typeof PalmServiceBridge === 'undefined') return reject({ errorText: T.noRoot });
       var bridge = new PalmServiceBridge();
-      bridges.push(bridge); // manter referência até a resposta
+      bridges.push(bridge); // keep a reference until the answer arrives
       bridge.onservicecallback = function (raw) {
         bridges.splice(bridges.indexOf(bridge), 1);
         var res;
@@ -157,8 +128,17 @@
   }
 
   function refresh() {
-    return run('status').then(function (out) { render(parse(out)); },
-                              function (e) { appendLog(T.failed + e.message); });
+    refreshing = true;
+    return run('status')
+      .then(function (out) { render(parse(out)); },
+            function (e) { appendLog(T.failed + e.message); })
+      .then(function () { refreshing = false; });
+  }
+
+  // Refreshes the status on its own: no button needed. Skipped while an action or
+  // another refresh is running, and while the app is in the background.
+  function autoRefresh() {
+    if (!busy && !refreshing && !document.hidden) refresh();
   }
 
   function action(arg) {
@@ -172,7 +152,7 @@
       .then(function () { busy = false; });
   }
 
-  // Navegação com o controle remoto (setas + OK)
+  // Remote control navigation (arrows + OK)
   function buttons() {
     return Array.prototype.filter.call(document.querySelectorAll('button'), function (b) { return !b.disabled; });
   }
@@ -189,6 +169,7 @@
       ev.preventDefault();
     }
   });
+  document.addEventListener('visibilitychange', autoRefresh);
 
   translate();
   $('btn-load').onclick = function () { action('load'); };
@@ -197,8 +178,8 @@
   $('btn-primary').onclick = function () { action(lastStatus.primary === 'on' ? 'primary-off' : 'primary-on'); };
   $('btn-wifi').onclick = function () { action(lastStatus.wififb === 'on' ? 'wififb-off' : 'wififb-on'); };
   $('btn-speed').onclick = function () { action('speedtest'); };
-  $('btn-refresh').onclick = function () { appendLog(T.running + 'status'); refresh(); };
 
   refresh().then(function () { return run('log 6'); }).then(function (out) { if (out) appendLog(out); }, function () {});
+  setInterval(autoRefresh, REFRESH_MS);
   fixFocus();
 })();

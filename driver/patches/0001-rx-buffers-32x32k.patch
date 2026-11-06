@@ -1,17 +1,17 @@
-Aumenta os buffers de recepção USB do r8152 (RTL8153 em USB 2.0).
+Increase r8152's USB receive buffers (RTL8153 on USB 2.0).
 
-Com 10 buffers de 16 KB, a TV LG lm21u (EHCI MStar) não esvazia a fila interna do
-adaptador rápido o bastante: há perda de pacotes antes do kernel (~17.700 segmentos
-TCP fora de ordem a cada 300 MB) e a recepção fica em ~152 Mbit/s na rede local.
-Com 32 buffers de 32 KB (o mesmo tamanho de buffer de recepção que o r8152 do Linux
-oficial usa para o RTL8153), a recepção vai a ~215 Mbit/s e os fora de ordem caem
-para ~600. O tamanho é repassado ao chip por r8153_set_rx_early_size().
+With 10 buffers of 16 KB, the LG lm21u TV (MStar EHCI) does not drain the adapter's
+internal queue fast enough: packets are lost before they reach the kernel (~17,700
+out-of-order TCP segments per 300 MB) and receiving stays at ~152 Mbit/s on the LAN.
+With 32 buffers of 32 KB (the same receive buffer size mainline Linux's r8152 uses
+for the RTL8153), receiving goes to ~215 Mbit/s and out-of-order segments drop to
+~600. The size is passed to the chip by r8153_set_rx_early_size().
 
-Medido em 05/11/2026 numa OLED55A1PSA (webOS 6.5.3), PC -> TV por HTTP, 300 MB:
+Measured on 2026-11-05 on an OLED55A1PSA (webOS 6.5.3), PC -> TV over HTTP, 300 MB:
   original (10 x 16 KB)  152-153 Mbit/s
   32 x 16 KB             155-159 Mbit/s
   10 x 32 KB             202-212 Mbit/s
-  32 x 32 KB             214-215 Mbit/s   <- este patch
+  32 x 32 KB             214-215 Mbit/s   <- this patch
 
 --- a/r8152.c
 +++ b/r8152.c

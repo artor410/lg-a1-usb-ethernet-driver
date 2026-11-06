@@ -11,22 +11,22 @@
     {
       "id": "io.github.artor410.lgusbethernet",
       "title": "USB Ethernet (RTL8153)",
-      "iconUri": "https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/app/largeIcon.png",
-      "manifestUrl": "https://github.com/artor410/lg-a1-usb-ethernet-driver/releases/latest/download/io.github.artor410.lgusbethernet.manifest.json",
+      "iconUri": "https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/app/largeIcon.png",
+      "manifestUrl": "https://github.com/artor410/webOS6-usbrealtek-driver/releases/latest/download/io.github.artor410.lgusbethernet.manifest.json",
       "manifest": {
         "id": "io.github.artor410.lgusbethernet",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "type": "web",
         "title": "USB Ethernet (RTL8153)",
         "appDescription": "r8152 USB Ethernet driver for LG webOS 6 TVs (lm21u / OLED A1)",
-        "iconUri": "https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/app/largeIcon.png",
-        "sourceUrl": "https://github.com/artor410/lg-a1-usb-ethernet-driver",
+        "iconUri": "https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/app/largeIcon.png",
+        "sourceUrl": "https://github.com/artor410/webOS6-usbrealtek-driver",
         "rootRequired": true,
-        "ipkUrl": "https://github.com/artor410/lg-a1-usb-ethernet-driver/releases/download/v0.5.0/io.github.artor410.lgusbethernet_0.5.0_all.ipk",
+        "ipkUrl": "https://github.com/artor410/webOS6-usbrealtek-driver/releases/download/v0.6.0/io.github.artor410.lgusbethernet_0.6.0_all.ipk",
         "ipkHash": {
-          "sha256": "e375e9a1d23849ebdafc308e6dd4978949c42524f528e7654ff4c5b2d25a9a62"
+          "sha256": "3c990d78c7e691fb7604a645b42f3acf1821dc31d25acaeab807c5e6c9f85066"
         },
-        "ipkSize": 233274
+        "ipkSize": 232832
       },
       "pool": "main",
       "requirements": {

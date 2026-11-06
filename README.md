@@ -1,67 +1,65 @@
-# lg-a1-usb-ethernet-driver
+# webOS6-usbrealtek-driver
 
-Driver **r8152** para usar um adaptador **USB-Ethernet Realtek (RTL8152/RTL8153)** em TVs **LG webOS 6**
-da plataforma **lm21u** (ex.: **OLED A1**, 2021), com um app para o **Homebrew Channel** que ativa o driver
-com o controle remoto.
+The **r8152** driver for **Realtek USB Ethernet adapters (RTL8152/RTL8153)** on **LG webOS 6** TVs with the
+**lm21u** platform (e.g. **OLED A1**, 2021), plus a **Homebrew Channel** app to turn it on with the remote.
 
-A porta de rede das TVs LG é de 100 Mbit/s. Com um adaptador gigabit na porta USB (2.0) a TV passa desse
-limite: na rede local medimos **~215 Mbit/s recebendo** e **~250 Mbit/s enviando** — útil para Plex,
-Jellyfin, Moonlight e afins.
+LG TVs have a 100 Mbit/s Ethernet port. With a gigabit adapter on the TV's USB 2.0 port, the TV goes well past
+that: on the local network it measured **~215 Mbit/s receiving** and **~250 Mbit/s sending**, which helps with
+Plex, Jellyfin, Moonlight and the like.
 
-*English summary [below](#english).*
+## Tested on
 
-## Testado em
-
-| TV | Firmware / webOS | Adaptador | Resultado |
+| TV | Firmware / webOS | Adapter | Result |
 |---|---|---|---|
-| OLED55A1PSA (2021) | 03.53.45 / webOS 6.5.3 | Realtek RTL8153 (`0bda:8153`) | ✅ funciona |
+| OLED55A1PSA (2021) | 03.53.45 / webOS 6.5.3 | Realtek RTL8153 (`0bda:8153`) | ✅ works |
 
-- O driver carrega sem erros; a TV configura a rede do adaptador **sozinha** (IP, rota e DNS pelo
-  gerenciador de rede da própria TV) e fica online. Link de 1000 Mbit/s.
-- Rede local (PC com 1 Gbit/s): **~215 Mbit/s** recebendo e **~250 Mbit/s** enviando, contra ~94 Mbit/s
-  da porta interna da TV. A partir da v0.3.0 o driver usa buffers de recepção maiores
-  ([`driver/patches/`](driver/patches/)); com os buffers originais a recepção ficava em ~152 Mbit/s.
-- Pela internet (plano de 300 Mbit/s, Cloudflare, um download de 50 MB): **182 Mbit/s** com a v0.3.0,
-  contra 111–119 Mbit/s com a v0.2.0. Em testes de navegador como o fast.com o próprio navegador da TV
-  pesa no resultado.
-- **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
-- **Adaptador como principal** (v0.4.0): o webOS passa de `disconnected` para `connected` (`eth0`,
-  `onInternet: yes`); testado ligando e desligando, desplugando o adaptador e desligando a TV pelo controle.
-- **Wi-Fi de reserva** (v0.5.0): adaptador desligado → Wi-Fi ligado após 60 s e a TV online por ele;
-  adaptador de volta → troca refeita e Wi-Fi desligado após 30 s. **Teste de velocidade** no app: 183 Mbit/s.
+- The driver loads cleanly; the TV configures the adapter's network **by itself** (address, route and DNS
+  through its own connection manager) and goes online. 1000 Mbit/s link.
+- Local network (PC at 1 Gbit/s): **~215 Mbit/s** receiving and **~250 Mbit/s** sending, versus ~94 Mbit/s on
+  the TV's built-in port. Since v0.3.0 the driver uses larger receive buffers
+  ([`driver/patches/`](driver/patches/)); with the original buffers, receiving topped out at ~152 Mbit/s.
+- Internet (300 Mbit/s plan, Cloudflare, one 50 MB download): **182–183 Mbit/s** with v0.3.0 and later,
+  versus 111–119 Mbit/s with v0.2.0. Browser-based tests such as fast.com come out lower because the TV's
+  browser itself is slow.
+- **Load at TV startup**, tested with reboots: the driver loads by itself about 40 s after power-on.
+- **Adapter as main connection** (v0.4.0): webOS goes from `disconnected` to `connected` (`eth0`,
+  `onInternet: yes`); tested turning it on and off, unplugging the adapter, and switching the TV off and on with
+  the remote.
+- **Wi-Fi fallback** (v0.5.0): adapter gone → Wi-Fi turned on after 60 s and the TV stayed online through it;
+  adapter back → swap redone and Wi-Fi turned off after 30 s. **Speed test** in the app: 183 Mbit/s.
 
-Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
-modelo, firmware e resultado.
+Tried it on another TV? Please open an [issue](https://github.com/artor410/webOS6-usbrealtek-driver/issues)
+with the model, firmware and result.
 
 > [!WARNING]
-> Isto carrega um módulo no kernel da TV. Foi compilado com o código-fonte GPL que a LG publica para esta TV
-> e testado no modelo acima, mas outros firmwares podem ter diferenças. Se algo der errado, a TV pode
-> travar e reiniciar; ela volta ao normal, e a ativação automática se desliga sozinha se a TV não terminar
-> de ligar. Use por sua conta e risco.
+> This loads a module into the TV's kernel. It is built from the GPL source LG publishes for this TV and tested
+> on the model above, but other firmwares may differ. If something goes wrong the TV may freeze and restart; it
+> comes back normally, and startup loading turns itself off if the TV does not finish booting. Use at your own
+> risk.
 
-## Compatibilidade
+## Compatibility
 
-| Item | Exigido |
+| Item | Required |
 |---|---|
-| TV | LG com plataforma `lm21u` (ex.: OLED A1 2021) |
-| Sistema | webOS 6.x (testado na compilação contra 6.5.3) |
+| TV | LG with the `lm21u` platform (e.g. OLED A1, 2021) |
+| System | webOS 6.x (built and tested against 6.5.3) |
 | Kernel | `4.4.84-*`, ARMv7 (`armv7l`) |
-| Acesso | **root** com o [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) |
+| Access | **root** with the [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) |
 
-O app confere tudo isso sozinho e se recusa a carregar o driver em outra TV. Para conferir pelo SSH:
+The app checks all of this itself and refuses to load the driver on any other TV. To check over SSH:
 
 ```sh
-nyx-cmd DeviceInfo query device_name   # deve mostrar: lm21u
-uname -r                               # deve começar com: 4.4.84-
+nyx-cmd DeviceInfo query device_name   # should print: lm21u
+uname -r                               # should start with: 4.4.84-
 ```
 
-### Adaptadores reconhecidos
+### Supported adapters
 
-Chip Realtek RTL8152 (100 Mbit/s) ou RTL8153 (1 Gbit/s). IDs USB aceitos pelo driver:
+Realtek RTL8152 (100 Mbit/s) or RTL8153 (1 Gbit/s) chips. USB IDs the driver accepts:
 
-| VID:PID | Adaptador |
+| VID:PID | Adapter |
 |---|---|
-| `0bda:8152`, `0bda:8153`, `0bda:8050` | Realtek (genéricos, a maioria dos adaptadores USB 3.0/USB-C) |
+| `0bda:8152`, `0bda:8153`, `0bda:8050` | Realtek (generic; most USB 3.0 / USB-C gigabit adapters) |
 | `045e:07ab`, `045e:07c6` | Microsoft |
 | `04e8:a101` | Samsung |
 | `17ef:304f`, `17ef:3062`, `17ef:3069`, `17ef:7205`, `17ef:720c`, `17ef:7214` | Lenovo |
@@ -69,184 +67,167 @@ Chip Realtek RTL8152 (100 Mbit/s) ou RTL8153 (1 Gbit/s). IDs USB aceitos pelo dr
 | `0955:09ff` | NVIDIA |
 | `2357:0601` | TP-Link UE300 |
 
-Adaptadores **RTL8156 (2.5G)** e **ASIX** não são reconhecidos por este driver.
+**RTL8156 (2.5G)** and **ASIX** adapters are not supported by this driver.
 
-## Instalação
+## Installation
 
-### Pelo Homebrew Channel (recomendado)
+### Through Homebrew Channel (recommended)
 
-Adicione este repositório no Homebrew Channel da TV. Assim o app aparece na lista e as atualizações
-chegam por lá.
+Add this project's repository to Homebrew Channel on the TV. The app then shows up in its list, and updates
+arrive there.
 
-1. Na TV, abra o **Homebrew Channel** → **Settings** (engrenagem) → **Repositories** → **Add repository**.
-2. Digite esta URL e confirme em **Add repository**:
+1. On the TV, open **Homebrew Channel** → **Settings** (gear) → **Repositories** → **Add repository**.
+2. Enter this URL and confirm with **Add repository**:
 
    ```
-   https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json
+   https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json
    ```
 
-3. Volte para a lista de apps: **USB Ethernet (RTL8153)** aparece marcado com *(from …)*. Abra e use
+3. Go back to the app list: **USB Ethernet (RTL8153)** shows up marked *(from …)*. Open it and press
    **Install**.
 
-Digitar a URL com o controle remoto é chato; com acesso SSH dá para abrir o Homebrew Channel já com a URL
-preenchida (só falta confirmar na TV):
+Typing the URL with the remote is tedious. Over SSH you can open Homebrew Channel with the URL already filled
+in (you only confirm it on the TV):
 
 ```sh
-luna-send -n 1 luna://com.webos.applicationManager/launch   '{"id":"org.webosbrew.hbchannel","params":{"launchMode":"addRepository","url":"https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json"}}'
+luna-send -n 1 luna://com.webos.applicationManager/launch '{"id":"org.webosbrew.hbchannel","params":{"launchMode":"addRepository","url":"https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json"}}'
 ```
 
-### Instalação manual do `.ipk`
+### Installing the `.ipk` by hand
 
-Baixe `io.github.artor410.lgusbethernet_<versão>_all.ipk` em
-[Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) e instale por **um** destes jeitos:
+Download `io.github.artor410.lgusbethernet_<version>_all.ipk` from
+[Releases](https://github.com/artor410/webOS6-usbrealtek-driver/releases) and install it **one** of these
+ways:
 
-- **webOS Dev Manager:** abra o [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop),
-  conecte na TV, vá em **Apps → Install** e escolha o `.ipk`.
-- **Pelo SSH** (TV com root):
+- **webOS Dev Manager:** open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), connect
+  to the TV, go to **Apps → Install** and pick the `.ipk`.
+- **Over SSH** (rooted TV):
 
   ```sh
-  scp io.github.artor410.lgusbethernet_<versão>_all.ipk root@IP_DA_TV:/tmp/app.ipk
-  ssh root@IP_DA_TV
-  luna-send -n 6 luna://com.webos.appInstallService/dev/install     '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
+  scp io.github.artor410.lgusbethernet_<version>_all.ipk root@TV_IP:/tmp/app.ipk
+  ssh root@TV_IP
+  luna-send -n 6 luna://com.webos.appInstallService/dev/install '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
   ```
 
-## Como usar
+## How to use it
 
-1. Conecte o adaptador numa porta USB da TV e o cabo de rede nele.
-2. Abra o app **USB Ethernet (RTL8153)** na lista de apps.
-3. Confira a coluna *Situação*: compatibilidade, adaptador detectado e driver.
-4. Use **Ativar driver agora**. Se der tudo certo, o adaptador aparece com uma interface de rede (ex.: `eth1`).
-5. Use **Usar adaptador como principal** (veja abaixo) para o webOS e os apps verem o cabo como conectado.
-6. Só depois de confirmar que funciona, use **Ativar ao ligar a TV** para carregar o driver a cada inicialização.
+1. Plug the adapter into a USB port on the TV, and the network cable into the adapter.
+2. Open **USB Ethernet (RTL8153)** from the app list.
+3. Check the *Status* column: compatibility, detected adapter and driver.
+4. Press **Load driver now**. If all goes well, the adapter shows up as a network interface (e.g. `eth1`).
+5. Press **Use adapter as main** (see below) so webOS and apps see the cable as connected.
+6. Only once it works, press **Load at TV startup** to load the driver every time the TV starts.
 
-Use o cabo só no adaptador: a porta de rede da própria TV fica de lado.
+Use the cable on the adapter only: the TV's own Ethernet port is left unused.
 
-### Adaptador como conexão principal (`eth0`)
+The status refreshes by itself every few seconds while the app is open.
 
-O webOS só considera conectada a interface `eth0`, que é a porta própria da TV. Com o adaptador como `eth1`
-a internet funciona, mas o webOS informa a conexão cabeada como **desconectada**: as Configurações podem
-mostrar "Não conectado" e alguns apps de streaming se recusam a tocar.
+### Adapter as the main connection (`eth0`)
 
-**Usar adaptador como principal** troca os nomes: o adaptador vira `eth0` e a porta própria fica como
-`eth2`. A internet cai por alguns segundos durante a troca. Depois disso:
+webOS only treats `eth0`, the TV's built-in port, as the wired connection. With the adapter as `eth1` the
+internet works, but webOS reports the wired connection as **disconnected**: Settings may show "Not connected"
+and some streaming apps refuse to play.
 
-- o webOS informa a conexão cabeada como conectada (a linha *Cabo no webOS* do app mostra `connected`);
-- um vigia leve confere os nomes a cada 5 s: refaz a troca quando a TV volta do modo de espera e devolve
-  `eth0` à porta própria se o adaptador for desconectado;
-- a escolha fica salva e vale também ao ligar a TV (com **Ativar ao ligar a TV**).
+**Use adapter as main** swaps the names: the adapter becomes `eth0` and the built-in port is parked as `eth2`.
+The internet drops for a few seconds during the swap. After that:
 
-Se depois da troca o `eth0` não pegar IP (e o adaptador tinha IP antes), o script derruba e religa o link;
-se ainda assim não vier, desfaz a troca até o próximo boot, para a TV não ficar sem rede.
+- webOS reports the wired connection as connected (the app's *Cable in webOS* row shows `connected`);
+- a light watcher checks the names every 5 s: it redoes the swap when the TV comes back from standby, and gives
+  `eth0` back to the built-in port if the adapter is unplugged;
+- the choice is saved and also applies at startup (with **Load at TV startup**).
 
-Para desfazer, use **Usar porta da TV como principal**. A lógica de troca foi adaptada do
-[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, veja [`THIRD_PARTY.md`](THIRD_PARTY.md)).
+If `eth0` gets no address after the swap (and the adapter had one before), the script takes the link down and
+up; if that does not help, it undoes the swap until the next boot so the TV is never left offline.
 
-### Wi-Fi de reserva
+To undo it, press **Use TV port as main**. The swap logic is adapted from
+[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, see [`THIRD_PARTY.md`](THIRD_PARTY.md)).
 
-Com **Ligar Wi-Fi de reserva**, se o cabo do adaptador ficar **1 minuto sem sinal** (cabo solto, roteador
-reiniciando, adaptador desconectado), o app liga o Wi-Fi pelo gerenciador de rede do próprio webOS — o mesmo
-botão das Configurações. Quando o cabo volta e fica **30 segundos** com sinal, o Wi-Fi é desligado de novo.
-Só mexe no Wi-Fi se ele estava desligado. A TV precisa ter uma rede Wi-Fi salva.
+### Wi-Fi fallback
 
-### Teste de velocidade
+With **Enable Wi-Fi fallback**, if the adapter's cable has **no link for 1 minute** (loose cable, router
+restarting, adapter unplugged), the app turns Wi-Fi on through webOS's own connection manager, the same switch
+as in Settings. Once the cable is back with a link for **30 seconds**, Wi-Fi is turned off again. It only
+touches Wi-Fi if Wi-Fi was off. The TV needs a saved Wi-Fi network.
 
-**Testar velocidade** baixa 50 MB de `speed.cloudflare.com` e mostra a velocidade em *Última velocidade*.
-Se o servidor recusar (ele limita testes seguidos), espere alguns minutos.
+### Speed test
 
-### Segurança
+**Test speed** downloads 50 MB from `speed.cloudflare.com` and shows the result under *Last speed*. If the
+server refuses (it rate-limits back-to-back tests), wait a few minutes.
 
-- O app só carrega o driver na plataforma e no kernel para os quais ele foi compilado.
-- **Proteção contra reinício em loop:** se a TV não terminar de ligar depois de carregar o driver
-  automaticamente, a ativação automática é desligada sozinha na inicialização seguinte. O Homebrew Channel
-  também tem um modo de segurança próprio que pula os scripts de inicialização depois de uma falha.
-- Para desinstalar: no app, use **Não ativar ao ligar a TV** e **Desativar driver**; depois remova o app.
-  (Se você remover o app direto, o script de inicialização se apaga sozinho no próximo boot.)
+### Safety
 
-### Linha de comando
+- The app only loads the driver on the platform and kernel it was built for.
+- **Boot-loop guard:** if the TV does not finish booting after loading the driver at startup, startup loading
+  turns itself off on the next boot. Homebrew Channel also has its own failsafe mode that skips startup scripts
+  after a failure.
+- To uninstall: in the app, press **Don't load at startup** and **Unload driver**, then remove the app. (If you
+  remove the app directly, its startup script deletes itself on the next boot.)
 
-O app usa um script que também funciona pelo SSH:
+### Command line
+
+The app uses a script that also works over SSH:
 
 ```sh
 S=/media/developer/apps/usr/palm/applications/io.github.artor410.lgusbethernet/bin/usbeth.sh
-sh $S status          # compatibilidade, adaptador, driver, interface
-sh $S load            # carrega o driver agora
-sh $S unload          # descarrega
-sh $S autostart-on    # carrega ao ligar a TV
+sh $S status          # compatibility, adapter, driver, interface
+sh $S load            # load the driver now
+sh $S unload          # unload it
+sh $S autostart-on    # load it when the TV starts
 sh $S autostart-off
-sh $S primary-on      # adaptador como eth0 (porta própria vira eth2) + vigia
-sh $S primary-off     # porta própria volta a ser eth0
-sh $S wififb-on       # Wi-Fi de reserva (liga o Wi-Fi após 60 s sem cabo)
+sh $S primary-on      # adapter as eth0 (built-in port becomes eth2) + watcher
+sh $S primary-off     # built-in port is eth0 again
+sh $S wififb-on       # Wi-Fi fallback (turns Wi-Fi on after 60 s without cable link)
 sh $S wififb-off
-sh $S speedtest       # baixa 50 MB e mostra a velocidade
-sh $S log             # registro (/var/lib/lg-a1-usb-ethernet/log.txt)
+sh $S speedtest       # downloads 50 MB and shows the speed
+sh $S log             # log (/var/lib/lg-a1-usb-ethernet/log.txt)
 ```
 
-## Compilar você mesmo
+Over SSH without a terminal, `luna-send` gives no output on this TV, so the *Cable in webOS* state and the Wi-Fi
+fallback only work when run from the app or at startup.
 
-O módulo pronto está em [`prebuilt/`](prebuilt/) (SHA-256 em `prebuilt/*.sha256`). Para reproduzir:
+## Building it yourself
 
-1. Baixe o pacote GPL **"webOS 6.0 LMUA 1.0"** em [opensource.lge.com](https://opensource.lge.com)
-   (procure por um modelo `OLED55A1…`); só a parte 2 é usada.
-2. Num Linux (ou WSL) com `gcc-9-arm-linux-gnueabihf`, `make`, `flex`, `bison`, `bc` e `libssl-dev`:
+The ready-made module is in [`prebuilt/`](prebuilt/) (SHA-256 in `prebuilt/*.sha256`). To reproduce it:
+
+1. Download LG's GPL package **"webOS 6.0 LMUA 1.0"** from [opensource.lge.com](https://opensource.lge.com)
+   (search for an `OLED55A1…` model); only part 2 is used.
+2. On Linux (or WSL) with `gcc-9-arm-linux-gnueabihf`, `make`, `flex`, `bison`, `bc`, `patch` and `libssl-dev`:
 
    ```sh
-   bash scripts/extrair-fonte.sh /pasta/dos/downloads
-   bash scripts/compilar-r8152.sh      # gera build/r8152.ko com a config da TV (diagnostico/config.gz)
-   bash scripts/empacotar-ipk.sh       # gera dist/*.ipk, dist/*.manifest.json e repo/apps.json
+   bash scripts/extract-source.sh /path/to/downloads
+   bash scripts/build-r8152.sh       # builds build/r8152.ko with the TV's config (diagnostics/config.gz)
+   bash scripts/package-ipk.sh       # builds dist/*.ipk, dist/*.manifest.json and repo/apps.json
    ```
 
-Detalhes da investigação (diagnóstico da TV, diferenças de configuração, riscos) em
-[`docs/DESENVOLVIMENTO.md`](docs/DESENVOLVIMENTO.md). O script `scripts/coletar-info-tv.sh` gera um relatório
-da sua TV — útil para abrir uma issue se quiser suporte para outro modelo.
+The investigation (TV diagnostics, config differences, measurements, risks) is in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `scripts/collect-tv-info.sh` writes a report about your TV,
+which is useful when opening an issue about another model.
 
-## Estrutura
+## Layout
 
-| Pasta | Conteúdo |
+| Folder | Contents |
 |---|---|
-| `app/` | App do Homebrew Channel (HTML/JS) e o script `bin/usbeth.sh` |
-| `driver/` | `r8152.c` exatamente como no pacote GPL da LG + `patches/` aplicados na compilação |
-| `prebuilt/` | `r8152.ko` compilado para `4.4.84` / `lm21u` |
-| `repo/` | Repositório próprio para o Homebrew Channel (`apps.json`, gerado por `scripts/gerar-indice.sh`) |
-| `scripts/` | Diagnóstico, compilação e empacotamento |
-| `diagnostico/` | Configuração do kernel da TV usada na compilação |
+| `app/` | The Homebrew Channel app (HTML/JS) and its `bin/usbeth.sh` script |
+| `driver/` | `r8152.c` exactly as in LG's GPL package, plus `patches/` applied at build time |
+| `prebuilt/` | `r8152.ko` built for `4.4.84` / `lm21u` |
+| `repo/` | This project's Homebrew Channel repository (`apps.json`, written by `scripts/generate-index.sh`) |
+| `scripts/` | Diagnostics, build and packaging |
+| `diagnostics/` | The TV's kernel config used for the build |
 
-## Uso de IA
+## Use of AI
 
-O driver foi compilado, e o app e os scripts foram escritos, por um agente de IA (Claude Code) sob a
-direção do mantenedor, que acompanhou e conduziu os testes na própria TV (OLED55A1PSA) e é responsável
-pelo projeto. O código do driver é o `r8152` original da Realtek/LG; a única mudança é o patch de tamanho dos buffers
-em `driver/patches/`, com as medidas que o justificam.
+The driver was built, and the app and scripts were written, by an AI agent (Claude Code) under the
+maintainer's direction; the maintainer drove the testing on their own TV (OLED55A1PSA) and is responsible for
+the project. The driver code is Realtek's/LG's original `r8152`; the only change is the receive-buffer patch in
+`driver/patches/`, with the measurements behind it.
 
-## Licença e créditos
+## License and credits
 
-- GPL-2.0 (veja [`LICENSE`](LICENSE)). O driver `r8152` é © Realtek Semiconductor, distribuído pela LG no
-  pacote de código aberto da TV; o código está em [`driver/r8152.c`](driver/r8152.c).
-- [webOS Homebrew Project](https://github.com/webosbrew) pelo Homebrew Channel.
-- [throwaway96/webos-kernel-drivers](https://github.com/throwaway96/webos-kernel-drivers) e
-  [DonZoomik/webos-r8152](https://github.com/DonZoomik/webos-r8152) pelas referências de como compilar
-  módulos para TVs webOS.
-
----
-
-## English
-
-**r8152 driver for Realtek RTL8152/RTL8153 USB Ethernet adapters on LG webOS 6 TVs with the `lm21u`
-platform (e.g. OLED A1, 2021), plus a Homebrew Channel app to load it with the remote.**
-
-**Tested on OLED55A1PSA (firmware 03.53.45, webOS 6.5.3) with an RTL8153 adapter:** the driver loads
-cleanly, the TV's own network manager configures the adapter automatically (DHCP, route, DNS), 1 Gbit/s link,
-~215 Mbit/s receive / ~250 Mbit/s send on the LAN (vs ~94 on the built-in port), and loading at startup works
-after a reboot. Since v0.3.0 the driver uses larger USB receive buffers (see `driver/patches/`).
-Use at your own risk; other firmwares may differ.
-
-- **Requirements:** rooted TV with Homebrew Channel, platform `lm21u`, kernel `4.4.84-*` (`armv7l`).
-  The app checks this and refuses to load elsewhere.
-- **Install:** in Homebrew Channel go to **Settings → Repositories → Add repository** and enter
-  `https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json` — the app then shows up in the list. Or download the `.ipk` from
-  [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) and install it with webOS Dev Manager.
-- **Use:** open **USB Ethernet (RTL8153)**, press **Load driver now**, check the status, press **Use adapter as
-  main** so the adapter becomes `eth0` (webOS only treats `eth0` as the wired connection), and only then enable
-  **Load at TV startup**. Optional: **Wi-Fi fallback** turns Wi-Fi on after 1 minute without cable link and off
-  again when the cable is back; **Test speed** downloads 50 MB and shows the result. A boot-loop guard turns startup loading off if the TV fails to finish booting.
-- **Build it yourself:** see the scripts in `scripts/` and `docs/DESENVOLVIMENTO.md` (Portuguese).
-- **License:** GPL-2.0.
+- GPL-2.0 (see [`LICENSE`](LICENSE)). The `r8152` driver is © Realtek Semiconductor, distributed by LG in the
+  TV's open source package; the code is in [`driver/r8152.c`](driver/r8152.c).
+- [webOS Homebrew Project](https://github.com/webosbrew) for Homebrew Channel.
+- [LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) for the interface swap and Wi-Fi fallback
+  logic (MIT, see [`THIRD_PARTY.md`](THIRD_PARTY.md)).
+- [throwaway96/webos-kernel-drivers](https://github.com/throwaway96/webos-kernel-drivers) and
+  [DonZoomik/webos-r8152](https://github.com/DonZoomik/webos-r8152) for showing how to build modules for webOS
+  TVs.
