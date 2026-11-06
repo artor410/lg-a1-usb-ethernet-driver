@@ -27,6 +27,8 @@ Jellyfin, Moonlight e afins.
 - **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
 - **Adaptador como principal** (v0.4.0): o webOS passa de `disconnected` para `connected` (`eth0`,
   `onInternet: yes`); testado ligando e desligando, desplugando o adaptador e desligando a TV pelo controle.
+- **Wi-Fi de reserva** (v0.5.0): adaptador desligado → Wi-Fi ligado após 60 s e a TV online por ele;
+  adaptador de volta → troca refeita e Wi-Fi desligado após 30 s. **Teste de velocidade** no app: 183 Mbit/s.
 
 Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
 modelo, firmware e resultado.
@@ -133,8 +135,23 @@ mostrar "Não conectado" e alguns apps de streaming se recusam a tocar.
   `eth0` à porta própria se o adaptador for desconectado;
 - a escolha fica salva e vale também ao ligar a TV (com **Ativar ao ligar a TV**).
 
+Se depois da troca o `eth0` não pegar IP (e o adaptador tinha IP antes), o script derruba e religa o link;
+se ainda assim não vier, desfaz a troca até o próximo boot, para a TV não ficar sem rede.
+
 Para desfazer, use **Usar porta da TV como principal**. A lógica de troca foi adaptada do
 [LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, veja [`THIRD_PARTY.md`](THIRD_PARTY.md)).
+
+### Wi-Fi de reserva
+
+Com **Ligar Wi-Fi de reserva**, se o cabo do adaptador ficar **1 minuto sem sinal** (cabo solto, roteador
+reiniciando, adaptador desconectado), o app liga o Wi-Fi pelo gerenciador de rede do próprio webOS — o mesmo
+botão das Configurações. Quando o cabo volta e fica **30 segundos** com sinal, o Wi-Fi é desligado de novo.
+Só mexe no Wi-Fi se ele estava desligado. A TV precisa ter uma rede Wi-Fi salva.
+
+### Teste de velocidade
+
+**Testar velocidade** baixa 50 MB de `speed.cloudflare.com` e mostra a velocidade em *Última velocidade*.
+Se o servidor recusar (ele limita testes seguidos), espere alguns minutos.
 
 ### Segurança
 
@@ -158,6 +175,9 @@ sh $S autostart-on    # carrega ao ligar a TV
 sh $S autostart-off
 sh $S primary-on      # adaptador como eth0 (porta própria vira eth2) + vigia
 sh $S primary-off     # porta própria volta a ser eth0
+sh $S wififb-on       # Wi-Fi de reserva (liga o Wi-Fi após 60 s sem cabo)
+sh $S wififb-off
+sh $S speedtest       # baixa 50 MB e mostra a velocidade
 sh $S log             # registro (/var/lib/lg-a1-usb-ethernet/log.txt)
 ```
 
@@ -226,6 +246,7 @@ Use at your own risk; other firmwares may differ.
   [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) and install it with webOS Dev Manager.
 - **Use:** open **USB Ethernet (RTL8153)**, press **Load driver now**, check the status, press **Use adapter as
   main** so the adapter becomes `eth0` (webOS only treats `eth0` as the wired connection), and only then enable
-  **Load at TV startup**. A boot-loop guard turns startup loading off if the TV fails to finish booting.
+  **Load at TV startup**. Optional: **Wi-Fi fallback** turns Wi-Fi on after 1 minute without cable link and off
+  again when the cable is back; **Test speed** downloads 50 MB and shows the result. A boot-loop guard turns startup loading off if the TV fails to finish booting.
 - **Build it yourself:** see the scripts in `scripts/` and `docs/DESENVOLVIMENTO.md` (Portuguese).
 - **License:** GPL-2.0.

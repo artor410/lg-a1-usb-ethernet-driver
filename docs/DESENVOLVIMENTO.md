@@ -134,3 +134,16 @@ Medido com `scripts/teste-velocidade.sh` e testes na rede local (PC a 1 Gbit/s, 
   porta própria; adaptador de volta → troca refeita. Desligar/ligar pelo controle fez boot completo: driver
   aos ~42 s, troca 0,4 s depois, `connected`; proteção `boot-pending` apagada no tempo.
 - `luna-send` só devolve saída no contexto do Homebrew Channel (exec/boot); pelo SSH sem terminal fica vazio.
+
+## v0.5.0 (06/11/2026): recuperação, Wi-Fi de reserva, teste de velocidade, boot em segundo plano
+- `wifi/getstatus` no webOS 6 devolve `"status":"serviceDisabled"` com o Wi-Fi desligado (mesmo formato do
+  webOS 24/25); `connectionmanager/setstate {"wifi":"enabled|disabled"}` liga e desliga.
+- O vigia precisa nascer no contexto do Homebrew Channel (app/boot) para o `luna-send` responder; um vigia
+  iniciado pelo SSH não consegue ler o estado do Wi-Fi e simplesmente não aciona a reserva.
+- Teste (adaptador desligado por software 110 s): eth0 volta à porta própria em ~16 s; Wi-Fi ligado aos
+  ~72 s e TV online por `wlan0`; adaptador de volta → troca refeita; Wi-Fi desligado 31 s depois.
+- Boot: `usbeth.sh boot` cria a proteção e devolve o controle; `boot-worker` carrega o driver em segundo
+  plano (driver ~37 s, troca ~42 s, proteção apagada ~160 s).
+- Recuperação após a troca (link down/up e desfazer se o eth0 não pegar IP): só o caminho normal foi
+  exercitado; a falha em si não foi simulada.
+- Teste de velocidade no app (50 MB, Cloudflare): 183 Mbit/s.

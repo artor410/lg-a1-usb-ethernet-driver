@@ -14,7 +14,11 @@
       primaryOn: 'Usar adaptador como principal', primaryOff: 'Usar porta da TV como principal',
       primaryRow: 'Conexão principal (eth0)', webosRow: 'Cabo no webOS',
       adapterName: 'adaptador', builtinName: 'porta da TV', noneName: 'nenhuma',
-      hint: 'Teste primeiro com "Ativar driver agora". "Usar adaptador como principal" faz o webOS e os apps verem o cabo como conectado.',
+      wifiOn: 'Ligar Wi-Fi de reserva', wifiOff: 'Desligar Wi-Fi de reserva', speed: 'Testar velocidade',
+      tv: 'TV', wifiRow: 'Wi-Fi de reserva', speedRow: 'Última velocidade',
+      on: 'ligado', off: 'desligado', wifiActive: 'ligado — Wi-Fi em uso agora (cabo sem sinal)',
+      noswap: 'troca desfeita: o eth0 não pegou IP (até reiniciar a TV)',
+      hint: '"Usar adaptador como principal" faz o webOS e os apps verem o cabo como conectado. O Wi-Fi de reserva liga o Wi-Fi se o cabo ficar 1 minuto sem sinal.',
       compat: 'Compatibilidade', kernel: 'Kernel', platform: 'Plataforma', webos: 'webOS',
       adapter: 'Adaptador', driver: 'Driver em uso', iface: 'Interface de rede',
       module: 'Driver r8152', autostart: 'Ativar ao ligar', route: 'Rota padrão',
@@ -34,7 +38,11 @@
       primaryOn: 'Use adapter as main', primaryOff: 'Use TV port as main',
       primaryRow: 'Main connection (eth0)', webosRow: 'Cable in webOS',
       adapterName: 'adapter', builtinName: 'TV port', noneName: 'none',
-      hint: 'Test with "Load driver now" first. "Use adapter as main" makes webOS and apps see the cable as connected.',
+      wifiOn: 'Enable Wi-Fi fallback', wifiOff: 'Disable Wi-Fi fallback', speed: 'Test speed',
+      tv: 'TV', wifiRow: 'Wi-Fi fallback', speedRow: 'Last speed',
+      on: 'on', off: 'off', wifiActive: 'on — Wi-Fi in use now (no cable link)',
+      noswap: 'swap undone: eth0 got no address (until the TV restarts)',
+      hint: '"Use adapter as main" makes webOS and apps see the cable as connected. Wi-Fi fallback turns Wi-Fi on if the cable has no link for 1 minute.',
       compat: 'Compatibility', kernel: 'Kernel', platform: 'Platform', webos: 'webOS',
       adapter: 'Adapter', driver: 'Bound driver', iface: 'Network interface',
       module: 'r8152 driver', autostart: 'Load at startup', route: 'Default route',
@@ -67,6 +75,7 @@
     'adapter=0bda:8153 Realtek USB 10/100/1000 LAN\nadapter_driver=r8152\nadapter_config=1\niface=eth0\n' +
     'iface_state=up\niface_carrier=1\niface_speed=1000\niface_ip=192.168.0.50/24\nmodule=loaded\n' +
     'primary=on\nwatcher=running\neth0_is=adapter\nbuiltin_iface=eth2\nwebos_wired=connected\n' +
+    'wififb=on\nwifi_by_us=no\nlast_speed=182 Mbit/s via eth0 (06/11 02:30)\n' +
     'autostart=off\ndefault_route=default via 192.168.0.1 dev eth0\n';
 
   function luna(uri, params) {
@@ -94,7 +103,7 @@
 
   function appendLog(text) {
     var el = $('log');
-    el.textContent = (el.textContent + text.replace(/\s+$/, '') + '\n').split('\n').slice(-14).join('\n');
+    el.textContent = (el.textContent + text.replace(/\s+$/, '') + '\n').split('\n').slice(-7).join('\n');
   }
 
   function row(label, value, cls) {
@@ -113,16 +122,17 @@
       (s.iface_ip ? ' · ' + s.iface_ip : '') : '';
     var html = '';
     html += row(T.compat, compatOk ? T.compatOk : s.compat, compatOk ? 'ok' : 'bad');
-    html += row(T.platform, s.platform);
+    html += row(T.tv, (s.platform || '?') + ' · webOS ' + (s.webos || '?'));
     html += row(T.kernel, s.kernel);
-    html += row(T.webos, s.webos);
     html += row(T.adapter, s.adapter || T.none, s.adapter ? 'ok' : 'warn');
-    html += row(T.driver, s.adapter_driver);
     html += row(T.module, s.module === 'loaded' ? T.loaded : T.notLoaded, s.module === 'loaded' ? 'ok' : '');
     html += row(T.iface, ifaceText, s.iface_carrier === '1' ? 'ok' : '');
-    html += row(T.primaryRow, { adapter: T.adapterName, builtin: T.builtinName }[s.eth0_is] || T.noneName,
-                s.eth0_is === 'adapter' ? 'ok' : '');
+    html += row(T.primaryRow, s.noswap ? T.noswap : ({ adapter: T.adapterName, builtin: T.builtinName }[s.eth0_is] || T.noneName),
+                s.noswap ? 'bad' : (s.eth0_is === 'adapter' ? 'ok' : ''));
     html += row(T.webosRow, s.webos_wired || '?', s.webos_wired === 'connected' || s.webos_wired === 'online' ? 'ok' : 'warn');
+    html += row(T.wifiRow, s.wififb === 'on' ? (s.wifi_by_us === 'yes' ? T.wifiActive : T.on) : T.off,
+                s.wifi_by_us === 'yes' ? 'warn' : '');
+    html += row(T.speedRow, s.last_speed);
     html += row(T.autostart, s.guard ? T.guard : (s.autostart === 'on' ? T.yes : T.no), s.guard ? 'bad' : '');
     html += row(T.route, s.default_route);
     $('status').innerHTML = html;
@@ -133,6 +143,7 @@
     $('btn-auto').disabled = !compatOk && s.autostart !== 'on';
     $('btn-primary').textContent = s.primary === 'on' ? T.primaryOff : T.primaryOn;
     $('btn-primary').disabled = s.primary !== 'on' && s.module !== 'loaded';
+    $('btn-wifi').textContent = s.wififb === 'on' ? T.wifiOff : T.wifiOn;
     fixFocus();
   }
 
@@ -184,6 +195,8 @@
   $('btn-unload').onclick = function () { action('unload'); };
   $('btn-auto').onclick = function () { action(lastStatus.autostart === 'on' ? 'autostart-off' : 'autostart-on'); };
   $('btn-primary').onclick = function () { action(lastStatus.primary === 'on' ? 'primary-off' : 'primary-on'); };
+  $('btn-wifi').onclick = function () { action(lastStatus.wififb === 'on' ? 'wififb-off' : 'wififb-on'); };
+  $('btn-speed').onclick = function () { action('speedtest'); };
   $('btn-refresh').onclick = function () { appendLog(T.running + 'status'); refresh(); };
 
   refresh().then(function () { return run('log 6'); }).then(function (out) { if (out) appendLog(out); }, function () {});

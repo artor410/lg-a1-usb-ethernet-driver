@@ -3,7 +3,7 @@
 # Roda como root (chamado pelo app via Homebrew Channel, ou pelo SSH).
 #
 # Uso: usbeth.sh status | load | unload | autostart-on | autostart-off
-#                | primary-on | primary-off | boot | log
+#                | primary-on | primary-off | wififb-on | wififb-off | speedtest | boot | log
 #
 # Só funciona no kernel para o qual o módulo foi compilado:
 # LG webOS 6, plataforma lm21u (ex.: OLED A1), kernel 4.4.84, ARMv7.
@@ -11,7 +11,9 @@
 # "primary": o webOS só considera conectada a interface eth0. Com primary ligado,
 # o adaptador vira eth0 e a porta própria da TV fica como eth2; um vigia refaz a
 # troca depois do modo de espera e devolve eth0 à porta própria se o adaptador sair.
-# A troca de nomes foi adaptada do LG-USB-2-ETH0 (MIT, Copyright (c) 2025 OhMyBahGosh,
+# "wififb" (Wi-Fi de reserva): se o cabo do adaptador ficar 60 s sem sinal, liga o Wi-Fi
+# pelo gerenciador do webOS; desliga de novo quando o cabo volta por 30 s.
+# A troca de nomes, a recuperação após a troca e o Wi-Fi de reserva foram adaptados do LG-USB-2-ETH0 (MIT, Copyright (c) 2025 OhMyBahGosh,
 # github.com/ohmybahgosh/LG-USB-2-ETH0, commit 3ec818a81ea7) — ver THIRD_PARTY.md.
 
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -23,6 +25,10 @@ STATE=/var/lib/lg-a1-usb-ethernet
 LOG="$STATE/log.txt"
 GUARD="$STATE/boot-pending"
 PRIMARY="$STATE/primary"
+WIFIFB="$STATE/wifi-fallback"
+WIFI_MARK="$STATE/wifi-by-us"
+SPEED="$STATE/last_speed"
+NOSWAP=/tmp/lg-a1-usb-ethernet.noswap
 WATCH_PID=/tmp/lg-a1-usb-ethernet.watch.pid
 INITD=/var/lib/webosbrew/init.d/60-lg-a1-usb-ethernet
 NET=/sys/class/net
@@ -155,6 +161,8 @@ swap_in() {
         say "eth0 is neither the adapter nor the built-in port; leaving names alone"
         return 1
     fi
+    _hadip=""
+    has_ipv4 "$_usb" && _hadip=1
     _park=""
     if [ -e "$NET/eth0" ]; then
         [ -s "$BUILTIN_MAC" ] || sysval "$NET/eth0/address" > "$BUILTIN_MAC"
@@ -176,7 +184,32 @@ swap_in() {
     ip link set dev eth0 up
     [ -n "$_park" ] && ip link set dev "$_park" up
     say "adapter is now eth0${_park:+ (built-in port parked as $_park)}"
-    return 0
+    # Recuperação: se o adaptador tinha IP antes e o eth0 não pega IP depois da troca,
+    # religa o link; se ainda assim não vier, desfaz a troca até o próximo boot.
+    [ -n "$_hadip" ] || return 0
+    wait_ipv4 eth0 20 && return 0
+    say "eth0 has no address 20 s after the swap: taking the link down and up"
+    ip link set dev eth0 down
+    sleep 2
+    ip link set dev eth0 up
+    if wait_ipv4 eth0 20; then say "eth0 is connected again"; return 0; fi
+    say "still no address: giving eth0 back to the built-in port until the next boot or a new primary-on"
+    touch "$NOSWAP"
+    swap_out
+    return 1
+}
+
+has_ipv4() { ip -4 addr show dev "$1" 2>/dev/null | grep -q 'inet '; }
+
+# wait_ipv4 IFACE SEGUNDOS
+wait_ipv4() {
+    _n=0
+    while [ "$_n" -lt "$2" ]; do
+        has_ipv4 "$1" && return 0
+        sleep 2
+        _n=$((_n + 2))
+    done
+    has_ipv4 "$1"
 }
 
 # Devolve eth0 à porta própria; o adaptador (se houver) fica com o primeiro ethN livre.
@@ -227,16 +260,34 @@ stop_watcher() {
 # Vigia: a cada 5 s confere os nomes. Depois do modo de espera a TV reinicia as
 # portas USB e o adaptador volta como eth1; se o adaptador sair, eth0 volta à
 # porta própria. Só lê alguns arquivos de /sys, quase não custa nada.
+want_watcher() { [ -e "$PRIMARY" ] || [ -e "$WIFIFB" ]; }
+
 cmd_watch() {
     echo $$ > "$WATCH_PID"
     log "watcher started"
-    while [ -e "$PRIMARY" ] && module_loaded; do
-        _u=$(find_usb_nic)
-        if [ -n "$_u" ] && [ "$_u" != eth0 ]; then
-            swap_in
-        elif [ -z "$_u" ]; then
-            _b=$(find_builtin_nic)
-            [ -n "$_b" ] && [ "$_b" != eth0 ] && swap_out
+    _down=0 _up=0 _wifi_tried=""
+    while module_loaded && want_watcher; do
+        if [ -e "$PRIMARY" ]; then
+            _u=$(find_usb_nic)
+            if [ -n "$_u" ] && [ "$_u" != eth0 ]; then
+                [ -e "$NOSWAP" ] || swap_in
+            elif [ -z "$_u" ]; then
+                _b=$(find_builtin_nic)
+                [ -n "$_b" ] && [ "$_b" != eth0 ] && swap_out
+            fi
+        fi
+        if [ -e "$WIFIFB" ]; then
+            _u=$(find_usb_nic)
+            if [ -n "$_u" ] && [ "$(sysval "$NET/$_u/carrier")" = 1 ]; then
+                _up=$((_up + 5)); _down=0; _wifi_tried=""
+            else
+                _down=$((_down + 5)); _up=0
+            fi
+            if [ "$_down" -ge 60 ] && [ -z "$_wifi_tried" ]; then
+                _wifi_tried=1
+                wifi_fallback
+            fi
+            [ "$_up" -ge 30 ] && [ -e "$WIFI_MARK" ] && wifi_back
         fi
         sleep 5
     done
@@ -244,9 +295,76 @@ cmd_watch() {
     log "watcher stopped"
 }
 
+# ---------- Wi-Fi de reserva ----------
+# Liga/desliga o Wi-Fi pelo gerenciador do webOS (o mesmo botão das Configurações).
+# Só funciona no contexto do Homebrew Channel (app/boot).
+wifi_status() {
+    _ws=$(luna-send -n 1 -w 3000 luna://com.webos.service.wifi/getstatus '{}' 2>/dev/null)
+    case "$_ws" in
+        *'"serviceDisabled"'*) echo disabled ;;
+        *'"returnValue":true'*) echo enabled ;;
+    esac
+}
+
+wifi_set() {
+    case "$(luna-send -n 1 -w 5000 luna://com.webos.service.connectionmanager/setstate "{\"wifi\":\"$1\"}" 2>/dev/null)" in
+        *'"returnValue":true'*) return 0 ;;
+    esac
+    return 1
+}
+
+wifi_fallback() {
+    [ "$(wifi_status)" = disabled ] || return 0   # já ligado (ou sem resposta): não mexe
+    if wifi_set enabled; then
+        echo on > "$WIFI_MARK"
+        say "adapter cable without link for 60 s: Wi-Fi turned on"
+    else
+        say "adapter cable without link for 60 s, but Wi-Fi could not be turned on"
+    fi
+}
+
+wifi_back() {
+    if wifi_set disabled; then say "adapter cable is back: Wi-Fi turned off again"; else say "could not turn Wi-Fi off; turn it off in the TV settings"; fi
+    rm -f "$WIFI_MARK"
+}
+
+cmd_wififb_on() {
+    mkdir -p "$STATE"; touch "$WIFIFB"; sync
+    say "Wi-Fi fallback enabled"
+    module_loaded && start_watcher
+    return 0
+}
+
+cmd_wififb_off() {
+    rm -f "$WIFIFB"; sync
+    [ -e "$WIFI_MARK" ] && wifi_back
+    stop_watcher
+    module_loaded && want_watcher && start_watcher
+    say "Wi-Fi fallback disabled"
+}
+
+# ---------- Teste de velocidade ----------
+cmd_speedtest() {
+    _if=$(ip route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+    _r=$(LC_ALL=C curl -s -o /dev/null --max-time 40 -w '%{http_code} %{size_download} %{time_total}' \
+        'https://speed.cloudflare.com/__down?bytes=50000000')
+    # shellcheck disable=SC2086
+    set -- $_r
+    if [ "$1" = 200 ] && [ "${2:-0}" -gt 1000000 ]; then
+        _mbps=$(awk -v b="$2" -v t="$3" 'BEGIN { printf "%.0f", b * 8 / t / 1e6 }')
+        mkdir -p "$STATE"
+        echo "$_mbps Mbit/s via $_if ($(date '+%d/%m %H:%M'))" > "$SPEED"
+        say "speed test: $_mbps Mbit/s download via $_if"
+    else
+        say "speed test failed (server answered ${1:-nothing}); try again in a few minutes"
+        return 1
+    fi
+}
+
 cmd_primary_on() {
     module_loaded || { say "load the driver first"; exit 1; }
     mkdir -p "$STATE"; touch "$PRIMARY"; sync
+    rm -f "$NOSWAP"
     say "primary connection: adapter as eth0"
     swap_in
     start_watcher
@@ -257,6 +375,7 @@ cmd_primary_off() {
     stop_watcher
     say "primary connection: built-in port as eth0"
     swap_out
+    want_watcher && start_watcher
     return 0
 }
 
@@ -297,6 +416,10 @@ cmd_status() {
     fi
     if module_loaded; then echo "module=loaded"; else echo "module=not-loaded"; fi
     if [ -e "$PRIMARY" ]; then echo "primary=on"; else echo "primary=off"; fi
+    [ -e "$NOSWAP" ] && echo "noswap=yes"
+    if [ -e "$WIFIFB" ]; then echo "wififb=on"; else echo "wififb=off"; fi
+    if [ -e "$WIFI_MARK" ]; then echo "wifi_by_us=yes"; else echo "wifi_by_us=no"; fi
+    echo "last_speed=$(cat "$SPEED" 2>/dev/null)"
     if watcher_running; then echo "watcher=running"; else echo "watcher=stopped"; fi
     if is_usb_nic eth0; then echo "eth0_is=adapter"; elif is_builtin_nic eth0; then echo "eth0_is=builtin"; else echo "eth0_is=none"; fi
     echo "builtin_iface=$(find_builtin_nic)"
@@ -319,7 +442,7 @@ cmd_load() {
     sleep 3
     dmesg | grep -iE 'r8152|rtl815|usb 1-' | tail -n 10 | while read -r l; do log "dmesg: $l"; done
     a=$(find_adapter) && say "adapter: $(echo "$a" | cut -d' ' -f2-) iface=$(adapter_iface "$(echo "$a" | cut -d' ' -f1)")"
-    [ -e "$PRIMARY" ] && start_watcher   # o vigia faz a troca para eth0 assim que a interface aparece
+    want_watcher && start_watcher   # o vigia faz a troca para eth0 e cuida do Wi-Fi de reserva
     return 0
 }
 
@@ -360,8 +483,15 @@ cmd_boot() {
         exit 1
     fi
     touch "$GUARD"; sync
+    # O resto roda em segundo plano: o boot (e o temporizador do modo de segurança do
+    # Homebrew Channel) não espera o driver carregar.
+    nohup sh "$SELF" boot-worker > /dev/null 2>&1 &
+}
+
+cmd_boot_worker() {
     if ( cmd_load ); then
-        ( sleep 120; rm -f "$GUARD"; sync ) > /dev/null 2>&1 &
+        sleep 120
+        rm -f "$GUARD"; sync
     else
         rm -f "$GUARD"   # falhou sem travar: não é motivo para desligar o autostart
     fi
@@ -375,8 +505,12 @@ case "$1" in
     autostart-off) cmd_autostart_off ;;
     primary-on) cmd_primary_on ;;
     primary-off) cmd_primary_off ;;
+    wififb-on) cmd_wififb_on ;;
+    wififb-off) cmd_wififb_off ;;
+    speedtest) cmd_speedtest ;;
+    boot-worker) cmd_boot_worker ;;
     watch) cmd_watch ;;
     boot) cmd_boot ;;
     log) tail -n "${2:-40}" "$LOG" 2>/dev/null ;;
-    *) echo "usage: $0 status|load|unload|autostart-on|autostart-off|primary-on|primary-off|boot|log"; exit 2 ;;
+    *) echo "usage: $0 status|load|unload|autostart-on|autostart-off|primary-on|primary-off|wififb-on|wififb-off|speedtest|boot|log"; exit 2 ;;
 esac
