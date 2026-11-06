@@ -119,3 +119,5 @@ Medido com `scripts/teste-velocidade.sh` e testes na rede local (PC a 1 Gbit/s, 
   O ganho vem do tamanho do buffer; 32 KB é o tamanho que o r8152 do Linux oficial usa para o RTL8153.
 - Virou `driver/patches/0001-rx-buffers-32x32k.patch`, aplicado por `scripts/compilar-r8152.sh`.
 - `speed.cloudflare.com` passa a recusar (HTTP 429) depois de muitos downloads seguidos do mesmo IP.
+- Depois de instalar a v0.3.0 pelo serviço do Homebrew Channel (a partir do manifesto) e recarregar o driver:
+  rede local 216 Mbit/s (fora de ordem 594); internet (Cloudflare, 50 MB) 182 Mbit/s, contra 111–119 antes.

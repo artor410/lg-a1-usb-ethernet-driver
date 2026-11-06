@@ -21,8 +21,9 @@ Jellyfin, Moonlight e afins.
 - Rede local (PC com 1 Gbit/s): **~215 Mbit/s** recebendo e **~250 Mbit/s** enviando, contra ~94 Mbit/s
   da porta interna da TV. A partir da v0.3.0 o driver usa buffers de recepção maiores
   ([`driver/patches/`](driver/patches/)); com os buffers originais a recepção ficava em ~152 Mbit/s.
-- Pela internet a velocidade depende também do servidor e da distância; num teste de navegador como o
-  fast.com o próprio navegador da TV pesa no resultado.
+- Pela internet (plano de 300 Mbit/s, Cloudflare, um download de 50 MB): **182 Mbit/s** com a v0.3.0,
+  contra 111–119 Mbit/s com a v0.2.0. Em testes de navegador como o fast.com o próprio navegador da TV
+  pesa no resultado.
 - **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
 
 Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
