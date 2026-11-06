@@ -146,3 +146,13 @@ Measured with `scripts/speed-test.sh` and LAN tests (PC at 1 Gbit/s, HTTP server
 - Recovery after the swap (link down/up, and undo if eth0 gets no address): only the normal path was
   exercised; the failure itself was not simulated.
 - Speed test in the app (50 MB, Cloudflare): 183 Mbit/s.
+
+## v0.6.x (2026-11-06): rename, English, automatic status refresh
+- The app refreshes its status every 10 s while it is visible and idle (the Refresh button is gone).
+  Measured through the app's own path (Homebrew Channel exec): one status run took ~0.9 s, ~0.35 s of it in
+  three `nyx-cmd` calls whose answers never change until a reboot. v0.6.1 caches those facts in `/tmp`
+  (`/tmp/lg-a1-usb-ethernet.static`): ~0.6 s per run, about 35% less. The watcher uses ~30 ms of CPU per minute.
+- Checked on the TV with a screen capture (`luna://com.webos.service.capture/executeOneShot`): the TV's
+  Chromium 79 ignores `gap` in flex layouts (the icon touched the title), and long log lines wrapped so the
+  newest line was hidden. v0.6.1 uses a margin instead of `gap` and scrolls the log to the newest line.
+- Speed after the rename and translation (no driver change): 189 Mbit/s (Cloudflare, 50 MB), versus 183 before.

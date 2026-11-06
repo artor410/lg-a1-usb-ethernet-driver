@@ -75,6 +75,7 @@
   function appendLog(text) {
     var el = $('log');
     el.textContent = (el.textContent + text.replace(/\s+$/, '') + '\n').split('\n').slice(-7).join('\n');
+    el.scrollTop = el.scrollHeight;   // long lines wrap: keep the newest line in view
   }
 
   function row(label, value, cls) {

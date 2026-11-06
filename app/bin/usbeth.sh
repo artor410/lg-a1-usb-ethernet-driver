@@ -392,11 +392,24 @@ webos_wired() {
     echo "$_w" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p'
 }
 
+# Facts that cannot change until the next boot (compatibility, kernel, platform, webOS
+# version), cached in /tmp: the app asks for the status every 10 s, and the nyx-cmd calls
+# behind these facts were about 40% of each status run.
+STATIC=/tmp/lg-a1-usb-ethernet.static
+static_info() {
+    if [ ! -s "$STATIC" ]; then
+        {
+            if msg=$(check_compat); then echo "compat=ok"; else echo "compat=$msg"; fi
+            echo "kernel=$(uname -r)"
+            echo "platform=$(nyx-cmd DeviceInfo query device_name 2>/dev/null)"
+            echo "webos=$(nyx-cmd OSInfo query webos_release 2>/dev/null)"
+        } > "$STATIC.tmp" && mv "$STATIC.tmp" "$STATIC"
+    fi
+    cat "$STATIC"
+}
+
 cmd_status() {
-    if msg=$(check_compat); then echo "compat=ok"; else echo "compat=$msg"; fi
-    echo "kernel=$(uname -r)"
-    echo "platform=$(nyx-cmd DeviceInfo query device_name 2>/dev/null)"
-    echo "webos=$(nyx-cmd OSInfo query webos_release 2>/dev/null)"
+    static_info
     if a=$(find_adapter); then
         set -- $a
         path=$1; shift
