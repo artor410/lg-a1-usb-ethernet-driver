@@ -3,7 +3,7 @@
 # Runs as root (called by the app through Homebrew Channel, or over SSH).
 #
 # Usage: usbeth.sh status | load | unload | autostart-on | autostart-off
-#                | primary-on | primary-off | wififb-on | wififb-off | speedtest | boot | log
+#                | primary-on | primary-off | wififb-on | wififb-off | speedtest | clock | boot | log
 #
 # Only works on the kernel the module was built for:
 # LG webOS 6, lm21u platform (e.g. OLED A1), kernel 4.4.84, ARMv7.
@@ -34,7 +34,9 @@ WIFI_MARK="$STATE/wifi-by-us"
 SPEED="$STATE/last_speed"
 NOSWAP=/tmp/lg-a1-usb-ethernet.noswap
 WATCH_PID=/tmp/lg-a1-usb-ethernet.watch.pid
-INITD=/var/lib/webosbrew/init.d/60-lg-a1-usb-ethernet
+# "05-" so run-parts starts this hook before other homebrew hooks; "60-" was used up to v0.6.1.
+INITD=/var/lib/webosbrew/init.d/05-lg-a1-usb-ethernet
+OLD_INITD=/var/lib/webosbrew/init.d/60-lg-a1-usb-ethernet
 NET=/sys/class/net
 PARK_NAME=eth2
 
@@ -269,12 +271,15 @@ want_watcher() { [ -e "$PRIMARY" ] || [ -e "$WIFIFB" ]; }
 cmd_watch() {
     echo $$ > "$WATCH_PID"
     log "watcher started"
-    _down=0 _up=0 _wifi_tried=""
+    _down=0 _up=0 _wifi_tried="" _ticks=0 _step=1 _ready=""
     while module_loaded && want_watcher; do
         if [ -e "$PRIMARY" ]; then
             _u=$(find_usb_nic)
             if [ -n "$_u" ] && [ "$_u" != eth0 ]; then
                 [ -e "$NOSWAP" ] || swap_in
+            elif [ "$_u" = eth0 ] && [ -z "$_ready" ] && has_ipv4 eth0; then
+                _ready=1
+                log "network ready: eth0 (adapter) has an address"
             elif [ -z "$_u" ]; then
                 _b=$(find_builtin_nic)
                 [ -n "$_b" ] && [ "$_b" != eth0 ] && swap_out
@@ -283,9 +288,9 @@ cmd_watch() {
         if [ -e "$WIFIFB" ]; then
             _u=$(find_usb_nic)
             if [ -n "$_u" ] && [ "$(sysval "$NET/$_u/carrier")" = 1 ]; then
-                _up=$((_up + 5)); _down=0; _wifi_tried=""
+                _up=$((_up + _step)); _down=0; _wifi_tried=""
             else
-                _down=$((_down + 5)); _up=0
+                _down=$((_down + _step)); _up=0
             fi
             if [ "$_down" -ge 60 ] && [ -z "$_wifi_tried" ]; then
                 _wifi_tried=1
@@ -293,7 +298,9 @@ cmd_watch() {
             fi
             [ "$_up" -ge 30 ] && [ -e "$WIFI_MARK" ] && wifi_back
         fi
-        sleep 5
+        _ticks=$((_ticks + 1))
+        [ "$_ticks" -ge 30 ] && _step=5
+        sleep "$_step"
     done
     rm -f "$WATCH_PID"
     log "watcher stopped"
@@ -317,13 +324,15 @@ wifi_set() {
     return 1
 }
 
+# wifi_fallback [REASON]
 wifi_fallback() {
+    _why=${1:-adapter cable without link for 60 s}
     [ "$(wifi_status)" = disabled ] || return 0   # already on (or no answer): leave it alone
     if wifi_set enabled; then
         echo on > "$WIFI_MARK"
-        say "adapter cable without link for 60 s: Wi-Fi turned on"
+        say "$_why: Wi-Fi turned on"
     else
-        say "adapter cable without link for 60 s, but Wi-Fi could not be turned on"
+        say "$_why, but Wi-Fi could not be turned on"
     fi
 }
 
@@ -345,6 +354,40 @@ cmd_wififb_off() {
     stop_watcher
     module_loaded && want_watcher && start_watcher
     say "Wi-Fi fallback disabled"
+}
+
+# ---------- Clock ----------
+# webOS sets its clock from LG's servers once the network is up. When the network comes up
+# late (the adapter only works once Homebrew Channel's startup hooks run), or those servers
+# are blocked (e.g. by privacy hooks after a grace period), the TV keeps its factory time
+# (2021): then every HTTPS connection on the TV fails with "certificate is not yet valid".
+# If the clock is still invalid some time after the driver loads, set it from the Date
+# header of a plain HTTP response, through webOS's own time service (which also updates
+# the RTC). A valid clock is never touched.
+CLOCK_URL=http://connectivitycheck.gstatic.com/generate_204
+clock_ok() { [ "$(date +%Y)" -ge 2025 ]; }
+
+fix_clock() {
+    _d=$(curl -sI -m 10 "$CLOCK_URL" 2>/dev/null | sed -n 's/^[Dd]ate: *//p' | tr -d '\r')
+    [ -n "$_d" ] || return 1
+    _t=$(date -u -D '%a, %d %b %Y %H:%M:%S GMT' -d "$_d" +%s 2>/dev/null) || return 1
+    [ "$_t" -gt 1735689600 ] || return 1   # sanity check: after 2025-01-01
+    case "$(luna-send -n 1 -w 5000 luna://com.webos.service.systemservice/time/setSystemTime "{\"utc\":$_t}" 2>/dev/null)" in
+        *'"returnValue":true'*) log "clock was invalid (factory time): set from the network to $_d"; return 0 ;;
+    esac
+    return 1
+}
+
+# Runs in the background after the driver loads.
+cmd_clock() {
+    sleep 45   # give webOS's own clock sync a chance first
+    _n=0
+    while ! clock_ok && [ "$_n" -lt 24 ]; do
+        fix_clock && return 0
+        sleep 5
+        _n=$((_n + 1))
+    done
+    clock_ok || log "clock is still invalid: HTTPS on the TV will fail until webOS sets it"
 }
 
 # ---------- Speed test ----------
@@ -437,11 +480,12 @@ cmd_status() {
     if [ -e "$WIFIFB" ]; then echo "wififb=on"; else echo "wififb=off"; fi
     if [ -e "$WIFI_MARK" ]; then echo "wifi_by_us=yes"; else echo "wifi_by_us=no"; fi
     echo "last_speed=$(cat "$SPEED" 2>/dev/null)"
+    if clock_ok; then echo "clock=ok"; else echo "clock=invalid"; fi
     if watcher_running; then echo "watcher=running"; else echo "watcher=stopped"; fi
     if is_usb_nic eth0; then echo "eth0_is=adapter"; elif is_builtin_nic eth0; then echo "eth0_is=builtin"; else echo "eth0_is=none"; fi
     echo "builtin_iface=$(find_builtin_nic)"
     echo "webos_wired=$(webos_wired)"
-    if [ -e "$INITD" ]; then echo "autostart=on"; else echo "autostart=off"; fi
+    if [ -e "$INITD" ] || [ -e "$OLD_INITD" ]; then echo "autostart=on"; else echo "autostart=off"; fi
     [ -e "$STATE/autostart-disabled-by-guard" ] && echo "guard=tripped"
     echo "default_route=$(ip route show default 2>/dev/null | head -n 1)"
 }
@@ -456,10 +500,12 @@ cmd_load() {
         exit 1
     fi
     say "driver loaded"
+    # Start the watcher at once: it does the eth0 swap as soon as the interface appears.
+    want_watcher && start_watcher
+    clock_ok || nohup sh "$SELF" clock > /dev/null 2>&1 &
     sleep 3
     dmesg | grep -iE 'r8152|rtl815|usb 1-' | tail -n 10 | while read -r l; do log "dmesg: $l"; done
     a=$(find_adapter) && say "adapter: $(echo "$a" | cut -d' ' -f2-) iface=$(adapter_iface "$(echo "$a" | cut -d' ' -f1)")"
-    want_watcher && start_watcher   # the watcher does the eth0 swap and the Wi-Fi fallback
     return 0
 }
 
@@ -480,26 +526,45 @@ cmd_autostart_on() {
 sh "$DIR/bin/usbeth.sh" boot
 EOF
     chmod 755 "$INITD"
-    rm -f "$STATE/autostart-disabled-by-guard"
+    rm -f "$OLD_INITD" "$STRIKES" "$STATE/autostart-disabled-by-guard"
     say "autostart enabled"
 }
 
 cmd_autostart_off() {
-    rm -f "$INITD"
+    rm -f "$INITD" "$OLD_INITD"
     say "autostart disabled"
 }
 
-# Called at boot by the init.d hook. If the previous boot did not finish after loading
-# the driver (the TV froze or restarted), startup loading is turned off for safety.
+# Called at boot by the init.d hook.
+# Boot-loop guard: the guard file exists from just before the driver loads until
+# GUARD_SECS after it loaded. If a boot finds it, the previous boot ended inside that
+# window: either the driver froze the TV, or the TV was simply switched off or
+# restarted early. One such boot is not enough to tell them apart, so startup loading
+# is only turned off after GUARD_STRIKES of them in a row. (Up to v0.6.1 a single one
+# turned it off, with a 120 s window, so switching the TV off within 2 minutes of
+# switching it on left it without a network on the next boot.)
+GUARD_SECS=30
+GUARD_STRIKES=2
+STRIKES="$STATE/boot-strikes"
 cmd_boot() {
     mkdir -p "$STATE"
+    log "boot hook started"
     if [ -e "$GUARD" ]; then
-        rm -f "$GUARD" "$INITD"
-        touch "$STATE/autostart-disabled-by-guard"
-        log "previous boot did not finish after loading the driver: autostart disabled for safety"
-        exit 1
+        _s=$(( $(cat "$STRIKES" 2>/dev/null || echo 0) + 1 ))
+        if [ "$_s" -ge "$GUARD_STRIKES" ]; then
+            rm -f "$GUARD" "$STRIKES" "$INITD" "$OLD_INITD"
+            touch "$STATE/autostart-disabled-by-guard"
+            log "$_s boots in a row did not get past the first ${GUARD_SECS}s after loading the driver: autostart disabled for safety"
+            # Without the driver the adapter has no network: fall back to Wi-Fi if allowed.
+            [ -e "$WIFIFB" ] && wifi_fallback "driver not loaded at startup"
+            exit 1
+        fi
+        echo "$_s" > "$STRIKES"
+        log "previous boot ended within ${GUARD_SECS}s of loading the driver (strike $_s of $GUARD_STRIKES); loading it again"
     fi
     touch "$GUARD"; sync
+    # Migrate the hook from the old "60-" name to "05-" (takes effect from the next boot).
+    [ -e "$OLD_INITD" ] && cmd_autostart_on > /dev/null
     # The rest runs in the background, so the boot (and Homebrew Channel's failsafe
     # timer) does not wait for the driver to load.
     nohup sh "$SELF" boot-worker > /dev/null 2>&1 &
@@ -507,8 +572,8 @@ cmd_boot() {
 
 cmd_boot_worker() {
     if ( cmd_load ); then
-        sleep 120
-        rm -f "$GUARD"; sync
+        sleep "$GUARD_SECS"
+        rm -f "$GUARD" "$STRIKES"; sync
     else
         rm -f "$GUARD"   # failed without freezing: no reason to turn startup loading off
     fi
@@ -525,6 +590,7 @@ case "$1" in
     wififb-on) cmd_wififb_on ;;
     wififb-off) cmd_wififb_off ;;
     speedtest) cmd_speedtest ;;
+    clock) cmd_clock ;;
     boot-worker) cmd_boot_worker ;;
     watch) cmd_watch ;;
     boot) cmd_boot ;;

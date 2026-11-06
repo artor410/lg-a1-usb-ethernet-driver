@@ -21,7 +21,9 @@ Plex, Jellyfin, Moonlight and the like.
 - Internet (300 Mbit/s plan, Cloudflare, one 50 MB download): **182–183 Mbit/s** with v0.3.0 and later,
   versus 111–119 Mbit/s with v0.2.0. Browser-based tests such as fast.com come out lower because the TV's
   browser itself is slow.
-- **Load at TV startup**, tested with reboots: the driver loads by itself about 40 s after power-on.
+- **Load at TV startup**, tested with reboots: the driver loads ~33 s after power-on (when Homebrew Channel
+  runs its startup hooks), the adapter becomes `eth0` a second later, and the network is ready at ~43–45 s.
+  Until then webOS shows the wired connection as not connected; this is the earliest a homebrew hook can run.
 - **Adapter as main connection** (v0.4.0): webOS goes from `disconnected` to `connected` (`eth0`,
   `onInternet: yes`); tested turning it on and off, unplugging the adapter, and switching the TV off and on with
   the remote.
@@ -157,9 +159,14 @@ server refuses (it rate-limits back-to-back tests), wait a few minutes.
 ### Safety
 
 - The app only loads the driver on the platform and kernel it was built for.
-- **Boot-loop guard:** if the TV does not finish booting after loading the driver at startup, startup loading
-  turns itself off on the next boot. Homebrew Channel also has its own failsafe mode that skips startup scripts
-  after a failure.
+- **Boot-loop guard:** if **two boots in a row** end within 30 s of loading the driver at startup, startup
+  loading turns itself off (and Wi-Fi is turned on if Wi-Fi fallback is enabled, so the TV is not left offline).
+  A single early power-off or restart does not trip it. Homebrew Channel also has its own failsafe mode that
+  skips startup scripts after a failure.
+- **Clock:** webOS sets its clock from LG's servers once the network is up. If that has not happened 45 s after
+  the driver loads (late network, or those servers blocked by a privacy hook), every HTTPS connection on the TV
+  fails, so the app sets the clock from a plain HTTP `Date` header through webOS's own time service. A valid
+  clock is never touched; the app's *Clock* row shows the state.
 - To uninstall: in the app, press **Don't load at startup** and **Unload driver**, then remove the app. (If you
   remove the app directly, its startup script deletes itself on the next boot.)
 

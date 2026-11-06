@@ -15,6 +15,7 @@
     compat: 'Compatibility', tv: 'TV', kernel: 'Kernel', adapter: 'Adapter', module: 'r8152 driver',
     iface: 'Network interface', primaryRow: 'Main connection (eth0)', webosRow: 'Cable in webOS',
     wifiRow: 'Wi-Fi fallback', speedRow: 'Last speed', autostart: 'Load at startup', route: 'Default route',
+    clockRow: 'Clock', clockOk: 'valid', clockBad: 'invalid (factory time): HTTPS fails until it is set',
     adapterName: 'adapter', builtinName: 'TV port', noneName: 'none',
     yes: 'yes', no: 'no', on: 'on', off: 'off', loaded: 'loaded', notLoaded: 'not loaded',
     none: 'no supported adapter connected', compatOk: 'supported',
@@ -46,7 +47,7 @@
     'adapter=0bda:8153 Realtek USB 10/100/1000 LAN\nadapter_driver=r8152\nadapter_config=1\niface=eth0\n' +
     'iface_state=up\niface_carrier=1\niface_speed=1000\niface_ip=192.168.0.50/24\nmodule=loaded\n' +
     'primary=on\nwatcher=running\neth0_is=adapter\nbuiltin_iface=eth2\nwebos_wired=connected\n' +
-    'wififb=on\nwifi_by_us=no\nlast_speed=182 Mbit/s via eth0 (06/11 02:30)\n' +
+    'wififb=on\nwifi_by_us=no\nlast_speed=182 Mbit/s via eth0 (06/11 02:30)\nclock=ok\n' +
     'autostart=off\ndefault_route=default via 192.168.0.1 dev eth0\n';
 
   function luna(uri, params) {
@@ -105,6 +106,7 @@
     html += row(T.wifiRow, s.wififb === 'on' ? (s.wifi_by_us === 'yes' ? T.wifiActive : T.on) : T.off,
                 s.wifi_by_us === 'yes' ? 'warn' : '');
     html += row(T.speedRow, s.last_speed);
+    html += row(T.clockRow, s.clock === 'invalid' ? T.clockBad : T.clockOk, s.clock === 'invalid' ? 'bad' : '');
     html += row(T.autostart, s.guard ? T.guard : (s.autostart === 'on' ? T.yes : T.no), s.guard ? 'bad' : '');
     html += row(T.route, s.default_route);
     $('status').innerHTML = html;

@@ -156,3 +156,24 @@ Measured with `scripts/speed-test.sh` and LAN tests (PC at 1 Gbit/s, HTTP server
   Chromium 79 ignores `gap` in flex layouts (the icon touched the title), and long log lines wrapped so the
   newest line was hidden. v0.6.1 uses a margin instead of `gap` and scrolls the log to the newest line.
 - Speed after the rename and translation (no driver change): 189 Mbit/s (Cloudflare, 50 MB), versus 183 before.
+
+## v0.6.2 (2026-11-06): faster startup, boot-loop guard fix, clock fix
+- Reported: right after switching the TV on, Settings showed the wired connection as "Not connected". The swap
+  worked; it just happened ~43 s after power-on. Boot milestones on this TV (bootd/initctl logs): core boot ~13 s,
+  adapter enumerated ~16 s, `webos-rbd` ~29 s, `webos-bd` ~41 s; Homebrew Channel runs `init.d` hooks at ~33–41 s.
+- Hook renamed from `60-` to `05-` (migrated automatically at boot) so `run-parts` starts it before the other
+  homebrew hooks: it now starts at ~32.5 s instead of ~38–41 s.
+- The watcher starts right after `insmod` (it used to start after a 3 s wait and the dmesg logging) and checks
+  every second for its first 30 s: the swap happens ~1 s after the driver loads instead of ~4 s.
+- Result: driver 32.7 s, swap 33.8 s, address on eth0 43.1 s (v0.6.1: swap ~43 s, address ~51 s).
+- Boot-loop guard: a reboot ~60 s after power-on (inside the old 120 s window) disabled startup loading, leaving
+  the TV without a network (cable on the adapter only, Wi-Fi off). Now the window is 30 s after the driver loads,
+  and it takes 2 such boots in a row; tested by rebooting 52 s after power-on: the next boot logged "strike 1 of 2",
+  loaded the driver and had the network at 45 s.
+- Clock: after that boot the TV kept its factory time (2021) because the network came up late (the driver was only
+  loaded by hand) and the `lifesgoodwithoutspying` hook blocks LG's SDP servers (which webOS uses to set the
+  clock) 60 s after it starts. Every HTTPS request failed with "certificate is not yet valid". The app now sets an
+  invalid clock (year < 2025) from the `Date` header of `http://connectivitycheck.gstatic.com/generate_204` via
+  `luna://com.webos.service.systemservice/time/setSystemTime`, 45 s after the driver loads; this also writes the
+  RTC. Tested by forcing the clock to 2021: HTTPS 000 → clock set from the network → HTTPS 200. The TV's
+  `autoClock` setting was already off and is not changed.
