@@ -15,31 +15,32 @@ header {
   display: flex;
   align-items: center;
   gap: 32px;
-  padding: 48px 80px 24px;
+  padding: 32px 80px 16px;
 }
 header img { width: 110px; height: 110px; }
-h1 { margin: 0; font-size: 56px; font-weight: 600; }
+h1 { margin: 0; font-size: 50px; font-weight: 600; }
 .sub { margin: 8px 0 0; color: #9aa0a6; }
 
 main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 40px;
-  padding: 16px 80px 48px;
+  padding: 8px 80px 32px;
 }
 
 .card {
   background: #1c2026;
   border-radius: 20px;
-  padding: 32px 40px;
-  height: 820px;
+  padding: 28px 40px;
+  height: 880px;
   overflow: hidden;
 }
 h2 { margin: 0 0 20px; font-size: 34px; color: #c3c7cc; }
 
 table { width: 100%; border-collapse: collapse; }
-td { padding: 12px 0; border-bottom: 1px solid #2c3139; vertical-align: top; }
-td:first-child { color: #9aa0a6; width: 38%; padding-right: 24px; }
+table { font-size: 25px; }
+td { padding: 8px 0; border-bottom: 1px solid #2c3139; vertical-align: top; }
+td:first-child { color: #9aa0a6; width: 34%; padding-right: 20px; }
 .ok { color: #81c995; }
 .warn { color: #fdd663; }
 .bad { color: #f28b82; }
@@ -61,7 +62,7 @@ button:disabled { opacity: 0.4; }
 
 pre {
   margin: 0;
-  height: 330px;
+  height: 300px;
   overflow: hidden;
   background: #0b0d10;
   border-radius: 12px;

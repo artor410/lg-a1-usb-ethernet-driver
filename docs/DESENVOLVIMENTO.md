@@ -121,3 +121,16 @@ Medido com `scripts/teste-velocidade.sh` e testes na rede local (PC a 1 Gbit/s, 
 - `speed.cloudflare.com` passa a recusar (HTTP 429) depois de muitos downloads seguidos do mesmo IP.
 - Depois de instalar a v0.3.0 pelo serviço do Homebrew Channel (a partir do manifesto) e recarregar o driver:
   rede local 216 Mbit/s (fora de ordem 594); internet (Cloudflare, 50 MB) 182 Mbit/s, contra 111–119 antes.
+
+## Adaptador como eth0 (06/11/2026, v0.4.0)
+- Com o adaptador como `eth1`, `connectionmanager/getStatus` dá `"wired":{"plugged":false,"state":"disconnected"}`
+  mesmo com internet (`isInternetConnectionAvailable: true`): o webOS só olha `eth0`.
+- Na MStar do A1 a porta própria é `/sys/devices/virtual/net/eth0` (sem link `device`), então ela é
+  reconhecida como "cabeada, `eth*`, fora do USB, não Wi-Fi/bridge/túnel"; na primeira troca o MAC é salvo
+  em `/var/lib/lg-a1-usb-ethernet/builtin_mac` e passa a valer o MAC.
+- Troca (adaptador → `eth0`, porta própria → `eth2`): ~12 s até a rede voltar; o connman mantém o serviço
+  (`ethernet_<mac>_cable`) e o IP; `getStatus` passa a `connected`, `interfaceName: eth0`, `onInternet: yes`.
+- Vigia (`usbeth.sh watch`, a cada 5 s): adaptador desligado por software (`authorized` 0/1) → eth0 volta à
+  porta própria; adaptador de volta → troca refeita. Desligar/ligar pelo controle fez boot completo: driver
+  aos ~42 s, troca 0,4 s depois, `connected`; proteção `boot-pending` apagada no tempo.
+- `luna-send` só devolve saída no contexto do Homebrew Channel (exec/boot); pelo SSH sem terminal fica vazio.

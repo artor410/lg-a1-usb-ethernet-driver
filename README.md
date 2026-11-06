@@ -25,6 +25,8 @@ Jellyfin, Moonlight e afins.
   contra 111–119 Mbit/s com a v0.2.0. Em testes de navegador como o fast.com o próprio navegador da TV
   pesa no resultado.
 - **Ativar ao ligar a TV** testado com reinício: o driver carrega sozinho em ~40 s após ligar.
+- **Adaptador como principal** (v0.4.0): o webOS passa de `disconnected` para `connected` (`eth0`,
+  `onInternet: yes`); testado ligando e desligando, desplugando o adaptador e desligando a TV pelo controle.
 
 Testou em outra TV? Abra uma [issue](https://github.com/artor410/lg-a1-usb-ethernet-driver/issues) com
 modelo, firmware e resultado.
@@ -112,10 +114,27 @@ Baixe `io.github.artor410.lgusbethernet_<versão>_all.ipk` em
 2. Abra o app **USB Ethernet (RTL8153)** na lista de apps.
 3. Confira a coluna *Situação*: compatibilidade, adaptador detectado e driver.
 4. Use **Ativar driver agora**. Se der tudo certo, o adaptador aparece com uma interface de rede (ex.: `eth1`).
-5. Só depois de confirmar que funciona, use **Ativar ao ligar a TV** para carregar o driver a cada inicialização.
+5. Use **Usar adaptador como principal** (veja abaixo) para o webOS e os apps verem o cabo como conectado.
+6. Só depois de confirmar que funciona, use **Ativar ao ligar a TV** para carregar o driver a cada inicialização.
 
-Dica: se o cabo também estiver ligado na porta de rede da própria TV, ela pode continuar usando a porta
-interna. Desconecte o cabo da porta interna para usar o adaptador.
+Use o cabo só no adaptador: a porta de rede da própria TV fica de lado.
+
+### Adaptador como conexão principal (`eth0`)
+
+O webOS só considera conectada a interface `eth0`, que é a porta própria da TV. Com o adaptador como `eth1`
+a internet funciona, mas o webOS informa a conexão cabeada como **desconectada**: as Configurações podem
+mostrar "Não conectado" e alguns apps de streaming se recusam a tocar.
+
+**Usar adaptador como principal** troca os nomes: o adaptador vira `eth0` e a porta própria fica como
+`eth2`. A internet cai por alguns segundos durante a troca. Depois disso:
+
+- o webOS informa a conexão cabeada como conectada (a linha *Cabo no webOS* do app mostra `connected`);
+- um vigia leve confere os nomes a cada 5 s: refaz a troca quando a TV volta do modo de espera e devolve
+  `eth0` à porta própria se o adaptador for desconectado;
+- a escolha fica salva e vale também ao ligar a TV (com **Ativar ao ligar a TV**).
+
+Para desfazer, use **Usar porta da TV como principal**. A lógica de troca foi adaptada do
+[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, veja [`THIRD_PARTY.md`](THIRD_PARTY.md)).
 
 ### Segurança
 
@@ -137,6 +156,8 @@ sh $S load            # carrega o driver agora
 sh $S unload          # descarrega
 sh $S autostart-on    # carrega ao ligar a TV
 sh $S autostart-off
+sh $S primary-on      # adaptador como eth0 (porta própria vira eth2) + vigia
+sh $S primary-off     # porta própria volta a ser eth0
 sh $S log             # registro (/var/lib/lg-a1-usb-ethernet/log.txt)
 ```
 
@@ -203,7 +224,8 @@ Use at your own risk; other firmwares may differ.
 - **Install:** in Homebrew Channel go to **Settings → Repositories → Add repository** and enter
   `https://raw.githubusercontent.com/artor410/lg-a1-usb-ethernet-driver/main/repo/apps.json` — the app then shows up in the list. Or download the `.ipk` from
   [Releases](https://github.com/artor410/lg-a1-usb-ethernet-driver/releases) and install it with webOS Dev Manager.
-- **Use:** open **USB Ethernet (RTL8153)**, press **Load driver now**, check the status, and only then enable
+- **Use:** open **USB Ethernet (RTL8153)**, press **Load driver now**, check the status, press **Use adapter as
+  main** so the adapter becomes `eth0` (webOS only treats `eth0` as the wired connection), and only then enable
   **Load at TV startup**. A boot-loop guard turns startup loading off if the TV fails to finish booting.
 - **Build it yourself:** see the scripts in `scripts/` and `docs/DESENVOLVIMENTO.md` (Portuguese).
 - **License:** GPL-2.0.

@@ -11,7 +11,10 @@
       load: 'Ativar driver agora', unload: 'Desativar driver',
       autoOn: 'Ativar ao ligar a TV', autoOff: 'Não ativar ao ligar a TV',
       refresh: 'Atualizar',
-      hint: 'Teste primeiro com "Ativar driver agora". Só ligue a ativação automática depois que funcionar.',
+      primaryOn: 'Usar adaptador como principal', primaryOff: 'Usar porta da TV como principal',
+      primaryRow: 'Conexão principal (eth0)', webosRow: 'Cabo no webOS',
+      adapterName: 'adaptador', builtinName: 'porta da TV', noneName: 'nenhuma',
+      hint: 'Teste primeiro com "Ativar driver agora". "Usar adaptador como principal" faz o webOS e os apps verem o cabo como conectado.',
       compat: 'Compatibilidade', kernel: 'Kernel', platform: 'Plataforma', webos: 'webOS',
       adapter: 'Adaptador', driver: 'Driver em uso', iface: 'Interface de rede',
       module: 'Driver r8152', autostart: 'Ativar ao ligar', route: 'Rota padrão',
@@ -28,7 +31,10 @@
       load: 'Load driver now', unload: 'Unload driver',
       autoOn: 'Load at TV startup', autoOff: "Don't load at startup",
       refresh: 'Refresh',
-      hint: 'Test with "Load driver now" first. Only enable startup loading once it works.',
+      primaryOn: 'Use adapter as main', primaryOff: 'Use TV port as main',
+      primaryRow: 'Main connection (eth0)', webosRow: 'Cable in webOS',
+      adapterName: 'adapter', builtinName: 'TV port', noneName: 'none',
+      hint: 'Test with "Load driver now" first. "Use adapter as main" makes webOS and apps see the cable as connected.',
       compat: 'Compatibility', kernel: 'Kernel', platform: 'Platform', webos: 'webOS',
       adapter: 'Adapter', driver: 'Bound driver', iface: 'Network interface',
       module: 'r8152 driver', autostart: 'Load at startup', route: 'Default route',
@@ -58,9 +64,10 @@
   // Modo demonstração (fora da TV): abra index.html?demo no navegador.
   var DEMO = typeof PalmServiceBridge === 'undefined' && /[?&]demo\b/.test(location.search);
   var demoStatus = 'compat=ok\nkernel=4.4.84-899.19.koli.1\nplatform=lm21u\nwebos=6.5.3\n' +
-    'adapter=0bda:8153 Realtek USB 10/100/1000 LAN\nadapter_driver=r8152\nadapter_config=1\niface=eth1\n' +
+    'adapter=0bda:8153 Realtek USB 10/100/1000 LAN\nadapter_driver=r8152\nadapter_config=1\niface=eth0\n' +
     'iface_state=up\niface_carrier=1\niface_speed=1000\niface_ip=192.168.0.50/24\nmodule=loaded\n' +
-    'autostart=off\ndefault_route=default via 192.168.0.1 dev eth1\n';
+    'primary=on\nwatcher=running\neth0_is=adapter\nbuiltin_iface=eth2\nwebos_wired=connected\n' +
+    'autostart=off\ndefault_route=default via 192.168.0.1 dev eth0\n';
 
   function luna(uri, params) {
     return new Promise(function (resolve, reject) {
@@ -113,6 +120,9 @@
     html += row(T.driver, s.adapter_driver);
     html += row(T.module, s.module === 'loaded' ? T.loaded : T.notLoaded, s.module === 'loaded' ? 'ok' : '');
     html += row(T.iface, ifaceText, s.iface_carrier === '1' ? 'ok' : '');
+    html += row(T.primaryRow, { adapter: T.adapterName, builtin: T.builtinName }[s.eth0_is] || T.noneName,
+                s.eth0_is === 'adapter' ? 'ok' : '');
+    html += row(T.webosRow, s.webos_wired || '?', s.webos_wired === 'connected' || s.webos_wired === 'online' ? 'ok' : 'warn');
     html += row(T.autostart, s.guard ? T.guard : (s.autostart === 'on' ? T.yes : T.no), s.guard ? 'bad' : '');
     html += row(T.route, s.default_route);
     $('status').innerHTML = html;
@@ -121,6 +131,8 @@
     $('btn-load').disabled = !compatOk || s.module === 'loaded';
     $('btn-unload').disabled = s.module !== 'loaded';
     $('btn-auto').disabled = !compatOk && s.autostart !== 'on';
+    $('btn-primary').textContent = s.primary === 'on' ? T.primaryOff : T.primaryOn;
+    $('btn-primary').disabled = s.primary !== 'on' && s.module !== 'loaded';
     fixFocus();
   }
 
@@ -171,6 +183,7 @@
   $('btn-load').onclick = function () { action('load'); };
   $('btn-unload').onclick = function () { action('unload'); };
   $('btn-auto').onclick = function () { action(lastStatus.autostart === 'on' ? 'autostart-off' : 'autostart-on'); };
+  $('btn-primary').onclick = function () { action(lastStatus.primary === 'on' ? 'primary-off' : 'primary-on'); };
   $('btn-refresh').onclick = function () { appendLog(T.running + 'status'); refresh(); };
 
   refresh().then(function () { return run('log 6'); }).then(function (out) { if (out) appendLog(out); }, function () {});
