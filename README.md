@@ -1,86 +1,201 @@
 # webOS6-usbrealtek-driver
 
-The **r8152** driver for **Realtek USB Ethernet adapters (RTL8152/RTL8153)** on **LG webOS 6** TVs with the
-**lm21u** platform (e.g. **OLED A1**, 2021), plus a **Homebrew Channel** app to turn it on with the remote.
+**Faster wired internet for LG webOS 6 TVs (OLED A1 and other 2021 `lm21u` models) using a cheap USB Ethernet
+adapter.**
 
-LG TVs have a 100 Mbit/s Ethernet port. With a gigabit adapter on the TV's USB 2.0 port, the TV goes well past
-that: on the local network it measured **~309 Mbit/s receiving** and **~250 Mbit/s sending**, with a round trip of
-**~0.22 ms** and no loss on game-stream-like bursts up to 200 Mbit/s, which helps with Plex, Jellyfin, Moonlight,
-Sunshine/Apollo and the like.
+The Ethernet port built into these TVs is limited to **100 Mbit/s**. Plug a gigabit USB adapter into the TV
+instead, install this app from Homebrew Channel, and the TV gets **about 3x faster wired internet**, with lower
+latency and no dropped packets in game streaming (Moonlight, Sunshine, Apollo) or high-bitrate movies (Plex,
+Jellyfin, Kodi).
+
+The app does everything with the remote: it loads the driver, makes webOS treat the adapter as the TV's normal
+cable connection, reloads it every time the TV starts, and can fall back to Wi-Fi if the cable stops working.
+
+## At a glance
+
+Measured on an LG OLED55A1PSA, with a PC on the same gigabit network:
+
+| | TV's own Ethernet port | Adapter with LG's driver as shipped | **Adapter with this project (v0.7)** |
+|---|---|---|---|
+| Download speed | ~94 Mbit/s | ~152 Mbit/s | **~309 Mbit/s** |
+| Game-stream video (bursts of 80–200 Mbit/s) | can't carry it | **~40–45% of packets lost**¹ | **no loss** |
+| Response time (ping, median) | — | ~0.35–0.45 ms¹ | **~0.25 ms** |
+| CPU used to receive 150 Mbit/s | — | — | ~10% of one core |
+
+¹ Measured with v0.6.2, which only enlarged LG's buffers; the cause is a bug in LG's code (explained
+[below](#whats-different-from-lgs-original-driver)).
+
+What this means in practice:
+
+- **4K movies:** even the heaviest 4K Blu-ray rips (peaks around 130–145 Mbit/s) have plenty of headroom.
+- **Game streaming:** a 150 Mbit/s Moonlight stream arrives complete; with LG's driver almost half of every
+  frame's packets were thrown away, which shows up as stutter, artifacts or the client lowering the quality.
+- **Internet:** on a 300 Mbit/s plan the TV downloads at ~180–190 Mbit/s (browser speed tests such as fast.com
+  show less because the TV's browser itself is slow).
+
+## What you need
+
+- An **LG TV with webOS 6 on the `lm21u` platform** (for example the OLED A1 from 2021). The app checks this
+  itself and will not load the driver on anything else.
+- The TV must be **rooted** and have **[Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel)**
+  installed (see [webosbrew.org](https://www.webosbrew.org/) for how to root).
+- A **USB Ethernet adapter with a Realtek RTL8153 chip** (most cheap "USB 3.0 to gigabit Ethernet" adapters and
+  many USB-C docks). RTL8152 (100 Mbit/s) adapters also work, but are no faster than the TV's own port. Full list
+  of accepted adapters: [Supported adapters](#supported-adapters).
+
+The TV's USB ports are USB 2.0, which is why the speed tops out at ~300 Mbit/s instead of 1000. That is still
+about three times the built-in port.
+
+## Install
+
+### Through Homebrew Channel (recommended)
+
+You add this project's app list to Homebrew Channel once; after that the app installs and updates like any
+other homebrew app.
+
+1. On the TV, open **Homebrew Channel** → **Settings** (gear icon) → **Repositories** → **Add repository**.
+2. Type this address and confirm with **Add repository**:
+
+   ```
+   https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json
+   ```
+
+3. Go back to the app list. **USB Ethernet (RTL8153)** now appears. Open it and press **Install**.
+
+Typing the address with the remote is tedious. If you can reach the TV over SSH, this opens Homebrew Channel
+with the address already filled in (you only confirm on the TV):
+
+```sh
+luna-send -n 1 luna://com.webos.applicationManager/launch '{"id":"org.webosbrew.hbchannel","params":{"launchMode":"addRepository","url":"https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json"}}'
+```
+
+### Installing the `.ipk` file by hand
+
+Download `io.github.artor410.lgusbethernet_<version>_all.ipk` from
+[Releases](https://github.com/artor410/webOS6-usbrealtek-driver/releases) and install it **one** of these ways:
+
+- **webOS Dev Manager:** open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), connect to
+  the TV, go to **Apps → Install** and pick the `.ipk`.
+- **Over SSH:**
+
+  ```sh
+  scp io.github.artor410.lgusbethernet_<version>_all.ipk root@TV_IP:/tmp/app.ipk
+  ssh root@TV_IP
+  luna-send -n 6 luna://com.webos.appInstallService/dev/install '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
+  ```
+
+Installed this way, the app does not update by itself; the Homebrew Channel method above is easier.
+
+## First use
+
+1. Plug the adapter into a USB port on the TV, and the network cable into the **adapter** (leave the TV's own
+   Ethernet port empty).
+2. Open **USB Ethernet (RTL8153)** from the app list.
+3. The **Status** column should show the TV as compatible and your adapter as detected.
+4. Press **Load driver now**. After a few seconds the adapter shows up with an address.
+5. Press **Use adapter as main**. The network drops for a few seconds, then webOS sees the cable as connected
+   (the *Cable in webOS* row says `connected`).
+6. Once everything works, press **Load at TV startup** so it happens automatically every time the TV turns on.
+7. Optional: press **Enable Wi-Fi fallback** if you have a Wi-Fi network saved on the TV.
+
+That's it. From now on the TV comes up with the adapter by itself, about 45 seconds after you turn it on.
+
+### What the buttons do
+
+| Button | What it does |
+|---|---|
+| **Load driver now** / **Unload driver** | Turns the adapter's driver on or off right now. |
+| **Use adapter as main** / **Use TV port as main** | Makes webOS treat the adapter as the TV's wired connection (needed for Settings and for apps that check the connection). The second button gives the role back to the TV's own port. |
+| **Load at TV startup** / **Don't load at startup** | Loads the driver (and your other choices) automatically every time the TV starts. |
+| **Enable Wi-Fi fallback** / **Disable Wi-Fi fallback** | If the cable has no link for 1 minute (loose cable, router restarting, adapter unplugged), turns Wi-Fi on; turns it off again once the cable has been back for 30 seconds. Needs a saved Wi-Fi network. |
+| **Test speed** | Downloads 50 MB from Cloudflare and shows the result under *Last speed*. |
+
+The status refreshes by itself every few seconds while the app is open.
+
+## Tips for game streaming and movies
+
+- Connect the TV and the gaming PC to the **same router or switch**, both with cables.
+- Game-streaming hosts send each video frame as a burst at full gigabit speed. The TV asks the router to pause
+  for a moment during each burst (Ethernet "flow control"), so the router's buffer catches the excess. Most
+  routers do this; if you still see packet loss, try another switch.
+- Bitrates **up to ~150 Mbit/s** are comfortable. At the same bitrate, **120 fps is easier than 60 fps** (each
+  frame, and so each burst, is half the size). Very large bursts, such as 300 Mbit/s at 60 fps, are too much for
+  the router to hold.
+- A full-speed download on the TV at the same time (for example an app update) fills the connection and raises
+  the latency to a few milliseconds while it lasts.
+- For movies, prefer **direct play** over transcoding in Plex/Jellyfin; the adapter has the speed for it.
+
+## What's different from LG's original driver
+
+The driver for these adapters (`r8152`, from Realtek) is in the source code LG publishes for the TV, but the TV
+does not come with it, and LG's copy is old. This project builds that same driver for the TV, with fixes:
+
+- **It was throwing packets away.** Most adapters today use the **RTL8153B** version of the chip. LG's driver
+  recognizes it but sets it up like the older RTL8153A. One setting (how much data the chip packs into each USB
+  transfer) uses a different unit on the B chip, so the chip sent transfers twice as big as the driver's buffers,
+  and the driver silently discarded whatever did not fit. With normal downloads TCP resends the lost data and you
+  only notice lower speed; with game streaming, which never resends, ~45% of each video frame was lost.
+  The setting is now done the way mainline Linux does it.
+- **It was waiting too long.** The chip collects packets for a moment before handing them to the TV. On the B chip
+  that delay lives in a different register; LG's driver put **250 µs** in the wrong one. It is now **15 µs** in the
+  right one (as in mainline Linux), which is where most of the lower ping comes from.
+- **Rest of the RTL8153B setup** copied from mainline Linux: a USB power-saving mode that can miss data is turned
+  off, and power tables meant only for the older chip are no longer written.
+- **More, right-sized buffers:** 32 receive buffers of 16 KB (LG: 10), the size the TV's USB controller handles
+  in one piece.
+- **Stability fixes** from newer Linux versions (shutdown ordering, error recovery, checksum handling, a false
+  "transmit timeout").
+- Adapters with the older RTL8152 / RTL8153A chips are programmed exactly as before.
+
+The full change is one patch, [`driver/patches/`](driver/patches/), applied to LG's original
+[`driver/r8152.c`](driver/r8152.c). Every step was measured on the TV; the numbers and method are in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
+The app also raises a system limit on network receive buffers while the driver is loaded (from 512 KB to 4 MB),
+because Moonlight asks for a bigger buffer than webOS normally allows.
+
+## Safety and uninstalling
+
+- The app only loads the driver on the TV model and system version it was built for.
+- **If something goes wrong at startup:** if the TV fails to finish starting **twice in a row** right after
+  loading the driver, the app stops loading it at startup by itself (and turns Wi-Fi on if Wi-Fi fallback is
+  enabled, so the TV is not left offline). Homebrew Channel also has its own failsafe mode.
+- **Clock:** if the TV's clock was never set (which breaks every secure website and app), the app sets it from
+  the internet. A correct clock is never touched.
+- **To uninstall:** in the app press **Don't load at startup** and **Unload driver**, then remove the app. (If
+  you remove the app directly, its startup script deletes itself on the next boot.)
+
+> [!WARNING]
+> This loads a driver into the TV's system. It is built from the source code LG publishes for this TV and has
+> been tested on the model listed below, but other firmware versions may behave differently. In the worst case the
+> TV freezes and restarts, and it comes back normally. Use at your own risk.
+
+## Troubleshooting
+
+- **Settings says "Not connected" right after turning the TV on.** Homebrew apps can only start ~35 seconds into
+  the boot; the adapter is ready at ~45 seconds. Wait a moment.
+- **Slower than expected?** Press **Test speed** in the app. If you test from a PC, check that the PC's own link
+  is really at 1 Gbit/s: some network cards come back from sleep stuck at 10 or 100 Mbit/s.
+- **Adapter not detected?** Check that it is in the [supported list](#supported-adapters) and try another USB port.
+- **Something else?** The app shows its log at the bottom. Please open an
+  [issue](https://github.com/artor410/webOS6-usbrealtek-driver/issues) with your TV model, firmware version,
+  adapter and the log.
 
 ## Tested on
 
 | TV | Firmware / webOS | Adapter | Result |
 |---|---|---|---|
-| OLED55A1PSA (2021) | 03.53.45 / webOS 6.5.3 | Realtek RTL8153 (`0bda:8153`) | ✅ works |
+| OLED55A1PSA (2021) | 03.53.45 / webOS 6.5.3 | Realtek RTL8153B (`0bda:8153`) | ✅ works |
 
-- The driver loads cleanly; the TV configures the adapter's network **by itself** (address, route and DNS
-  through its own connection manager) and goes online. 1000 Mbit/s link.
-- Local network (PC at 1 Gbit/s on the same switch), v0.7.0: **~309 Mbit/s** receiving (TCP) and **~250 Mbit/s**
-  sending, versus ~94 Mbit/s on the TV's built-in port and ~152 Mbit/s with LG's unmodified driver.
-- Game streaming (v0.7.0): Sunshine/Apollo send each video frame as a burst at gigabit speed. Bursts of
-  80–200 Mbit/s at 60–120 fps arrive **without loss** (0.2% at 300 Mbit/s @120 fps); up to v0.6.2, 41–44% of
-  such bursts were lost. UDP round trip: **~0.22 ms** idle, **~0.24 ms** while receiving a 100 Mbit/s stream
-  (v0.6.2: ~0.35 and ~0.45 ms). Receiving 150 Mbit/s uses ~10% of one CPU core.
-  See [What v0.7.0 fixed](#what-v070-fixed-in-the-driver).
-- Internet (300 Mbit/s plan, Cloudflare, one 50 MB download): **182–183 Mbit/s** with v0.3.0 and later,
-  versus 111–119 Mbit/s with v0.2.0. Browser-based tests such as fast.com come out lower because the TV's
-  browser itself is slow.
-- **Load at TV startup**, tested with reboots: the driver loads ~33 s after power-on (when Homebrew Channel
-  runs its startup hooks), the adapter becomes `eth0` a second later, and the network is ready at ~43–45 s.
-  Until then webOS shows the wired connection as not connected; this is the earliest a homebrew hook can run.
-- **Adapter as main connection** (v0.4.0): webOS goes from `disconnected` to `connected` (`eth0`,
-  `onInternet: yes`); tested turning it on and off, unplugging the adapter, and switching the TV off and on with
-  the remote.
-- **Wi-Fi fallback** (v0.5.0): adapter gone → Wi-Fi turned on after 60 s and the TV stayed online through it;
-  adapter back → swap redone and Wi-Fi turned off after 30 s. **Speed test** in the app: 183 Mbit/s.
-
-## What v0.7.0 fixed in the driver
-
-The common adapters (and the one tested here) use the **RTL8153B** chip. LG's driver recognizes it but programs it
-like the older RTL8153A ([`driver/patches/`](driver/patches/) has the full patch and its description):
-
-- **Lost bursts.** The chip's "early size" (how much it packs into one USB transfer) is counted in 8-byte units
-  on the RTL8153B; LG's driver wrote 4-byte units, so the chip built transfers up to twice the size of the
-  driver's buffers and the driver silently dropped what did not fit. This was invisible in every counter and cost
-  ~45% of the packets of a video burst. Now set as in mainline Linux.
-- **Latency.** The RTL8153B's receive timer is a different register; LG's driver put a 250 µs delay into a
-  secondary timer instead. Now 15 µs, as in mainline Linux, plus the rest of mainline's RTL8153B setup (USB power
-  saving that can miss transfers turned off, no RTL8153A-only power tables).
-- **Buffers.** 32 receive buffers of 16 KB, the size the TV's USB controller handles in one piece.
-
-Tips for game streaming over this adapter: keep the PC and the TV on the same gigabit switch (the TV uses Ethernet
-flow control to pause the switch during bursts, so a switch that honors pause frames helps); prefer 120 fps over
-60 fps at the same bitrate (half the burst per frame); bitrates up to ~150 Mbit/s are comfortable.
+Tested on that TV: loading at startup, the adapter as main connection, standby and power cycles, unplugging and
+replugging the adapter, Wi-Fi fallback, and the speed and game-stream measurements above.
 
 Tried it on another TV? Please open an [issue](https://github.com/artor410/webOS6-usbrealtek-driver/issues)
 with the model, firmware and result.
 
-> [!WARNING]
-> This loads a module into the TV's kernel. It is built from the GPL source LG publishes for this TV and tested
-> on the model above, but other firmwares may differ. If something goes wrong the TV may freeze and restart; it
-> comes back normally, and startup loading turns itself off if the TV does not finish booting. Use at your own
-> risk.
+## Supported adapters
 
-## Compatibility
-
-| Item | Required |
-|---|---|
-| TV | LG with the `lm21u` platform (e.g. OLED A1, 2021) |
-| System | webOS 6.x (built and tested against 6.5.3) |
-| Kernel | `4.4.84-*`, ARMv7 (`armv7l`) |
-| Access | **root** with the [Homebrew Channel](https://github.com/webosbrew/webos-homebrew-channel) |
-
-The app checks all of this itself and refuses to load the driver on any other TV. To check over SSH:
-
-```sh
-nyx-cmd DeviceInfo query device_name   # should print: lm21u
-uname -r                               # should start with: 4.4.84-
-```
-
-### Supported adapters
-
-Realtek RTL8152 (100 Mbit/s) or RTL8153 (1 Gbit/s) chips. USB IDs the driver accepts:
+Adapters with a Realtek RTL8152 (100 Mbit/s) or RTL8153 (1 Gbit/s) chip. USB IDs the driver accepts:
 
 | VID:PID | Adapter |
 |---|---|
@@ -92,106 +207,16 @@ Realtek RTL8152 (100 Mbit/s) or RTL8153 (1 Gbit/s) chips. USB IDs the driver acc
 | `0955:09ff` | NVIDIA |
 | `2357:0601` | TP-Link UE300 |
 
-**RTL8156 (2.5G)** and **ASIX** adapters are not supported by this driver.
+**Not supported:** 2.5 Gbit/s adapters (RTL8156) and adapters with ASIX chips.
 
-## Installation
-
-### Through Homebrew Channel (recommended)
-
-Add this project's repository to Homebrew Channel on the TV. The app then shows up in its list, and updates
-arrive there.
-
-1. On the TV, open **Homebrew Channel** → **Settings** (gear) → **Repositories** → **Add repository**.
-2. Enter this URL and confirm with **Add repository**:
-
-   ```
-   https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json
-   ```
-
-3. Go back to the app list: **USB Ethernet (RTL8153)** shows up marked *(from …)*. Open it and press
-   **Install**.
-
-Typing the URL with the remote is tedious. Over SSH you can open Homebrew Channel with the URL already filled
-in (you only confirm it on the TV):
+To check a TV over SSH:
 
 ```sh
-luna-send -n 1 luna://com.webos.applicationManager/launch '{"id":"org.webosbrew.hbchannel","params":{"launchMode":"addRepository","url":"https://raw.githubusercontent.com/artor410/webOS6-usbrealtek-driver/main/repo/apps.json"}}'
+nyx-cmd DeviceInfo query device_name   # should print: lm21u
+uname -r                               # should start with: 4.4.84-
 ```
 
-### Installing the `.ipk` by hand
-
-Download `io.github.artor410.lgusbethernet_<version>_all.ipk` from
-[Releases](https://github.com/artor410/webOS6-usbrealtek-driver/releases) and install it **one** of these
-ways:
-
-- **webOS Dev Manager:** open [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop), connect
-  to the TV, go to **Apps → Install** and pick the `.ipk`.
-- **Over SSH** (rooted TV):
-
-  ```sh
-  scp io.github.artor410.lgusbethernet_<version>_all.ipk root@TV_IP:/tmp/app.ipk
-  ssh root@TV_IP
-  luna-send -n 6 luna://com.webos.appInstallService/dev/install '{"id":"io.github.artor410.lgusbethernet","ipkUrl":"/tmp/app.ipk","subscribe":true}'
-  ```
-
-## How to use it
-
-1. Plug the adapter into a USB port on the TV, and the network cable into the adapter.
-2. Open **USB Ethernet (RTL8153)** from the app list.
-3. Check the *Status* column: compatibility, detected adapter and driver.
-4. Press **Load driver now**. If all goes well, the adapter shows up as a network interface (e.g. `eth1`).
-5. Press **Use adapter as main** (see below) so webOS and apps see the cable as connected.
-6. Only once it works, press **Load at TV startup** to load the driver every time the TV starts.
-
-Use the cable on the adapter only: the TV's own Ethernet port is left unused.
-
-The status refreshes by itself every few seconds while the app is open.
-
-### Adapter as the main connection (`eth0`)
-
-webOS only treats `eth0`, the TV's built-in port, as the wired connection. With the adapter as `eth1` the
-internet works, but webOS reports the wired connection as **disconnected**: Settings may show "Not connected"
-and some streaming apps refuse to play.
-
-**Use adapter as main** swaps the names: the adapter becomes `eth0` and the built-in port is parked as `eth2`.
-The internet drops for a few seconds during the swap. After that:
-
-- webOS reports the wired connection as connected (the app's *Cable in webOS* row shows `connected`);
-- a light watcher checks the names every 5 s: it redoes the swap when the TV comes back from standby, and gives
-  `eth0` back to the built-in port if the adapter is unplugged;
-- the choice is saved and also applies at startup (with **Load at TV startup**).
-
-If `eth0` gets no address after the swap (and the adapter had one before), the script takes the link down and
-up; if that does not help, it undoes the swap until the next boot so the TV is never left offline.
-
-To undo it, press **Use TV port as main**. The swap logic is adapted from
-[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, see [`THIRD_PARTY.md`](THIRD_PARTY.md)).
-
-### Wi-Fi fallback
-
-With **Enable Wi-Fi fallback**, if the adapter's cable has **no link for 1 minute** (loose cable, router
-restarting, adapter unplugged), the app turns Wi-Fi on through webOS's own connection manager, the same switch
-as in Settings. Once the cable is back with a link for **30 seconds**, Wi-Fi is turned off again. It only
-touches Wi-Fi if Wi-Fi was off. The TV needs a saved Wi-Fi network.
-
-### Speed test
-
-**Test speed** downloads 50 MB from `speed.cloudflare.com` and shows the result under *Last speed*. If the
-server refuses (it rate-limits back-to-back tests), wait a few minutes.
-
-### Safety
-
-- The app only loads the driver on the platform and kernel it was built for.
-- **Boot-loop guard:** if **two boots in a row** end within 30 s of loading the driver at startup, startup
-  loading turns itself off (and Wi-Fi is turned on if Wi-Fi fallback is enabled, so the TV is not left offline).
-  A single early power-off or restart does not trip it. Homebrew Channel also has its own failsafe mode that
-  skips startup scripts after a failure.
-- **Clock:** webOS sets its clock from LG's servers once the network is up. If that has not happened 45 s after
-  the driver loads (late network, or those servers blocked by a privacy hook), every HTTPS connection on the TV
-  fails, so the app sets the clock from a plain HTTP `Date` header through webOS's own time service. A valid
-  clock is never touched; the app's *Clock* row shows the state.
-- To uninstall: in the app, press **Don't load at startup** and **Unload driver**, then remove the app. (If you
-  remove the app directly, its startup script deletes itself on the next boot.)
+## For advanced users
 
 ### Command line
 
@@ -215,7 +240,17 @@ sh $S log             # log (/var/lib/lg-a1-usb-ethernet/log.txt)
 Over SSH without a terminal, `luna-send` gives no output on this TV, so the *Cable in webOS* state and the Wi-Fi
 fallback only work when run from the app or at startup.
 
-## Building it yourself
+How the main-connection swap works: webOS only treats `eth0` (normally the TV's own port) as the wired
+connection, so the app renames the adapter to `eth0` and parks the built-in port as `eth2`. A light watcher redoes
+the swap after standby and gives `eth0` back to the built-in port if the adapter is unplugged; if the adapter gets
+no address after the swap, it undoes it so the TV is never left offline. This logic is adapted from
+[LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) (MIT, see [`THIRD_PARTY.md`](THIRD_PARTY.md)).
+
+The driver has optional module parameters for experiments (none are needed); they are listed in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). [`tools/netprobe/`](tools/netprobe/) has the measurement tools
+used for the numbers in this README.
+
+### Building it yourself
 
 The ready-made module is in [`prebuilt/`](prebuilt/) (SHA-256 in `prebuilt/*.sha256`). To reproduce it:
 
@@ -229,32 +264,34 @@ The ready-made module is in [`prebuilt/`](prebuilt/) (SHA-256 in `prebuilt/*.sha
    bash scripts/package-ipk.sh       # builds dist/*.ipk, dist/*.manifest.json and repo/apps.json
    ```
 
-The investigation (TV diagnostics, config differences, measurements, risks) is in
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). `scripts/collect-tv-info.sh` writes a report about your TV,
-which is useful when opening an issue about another model.
+`scripts/collect-tv-info.sh` writes a report about your TV, which is useful when opening an issue about another
+model.
 
-## Layout
+### Project layout
 
 | Folder | Contents |
 |---|---|
 | `app/` | The Homebrew Channel app (HTML/JS) and its `bin/usbeth.sh` script |
 | `driver/` | `r8152.c` exactly as in LG's GPL package, plus `patches/` applied at build time |
 | `prebuilt/` | `r8152.ko` built for `4.4.84` / `lm21u` |
-| `repo/` | This project's Homebrew Channel repository (`apps.json`, written by `scripts/generate-index.sh`) |
+| `repo/` | This project's Homebrew Channel app list (`apps.json`) |
 | `scripts/` | Diagnostics, build and packaging |
+| `tools/netprobe/` | Network measurement tools (TV and PC) |
 | `diagnostics/` | The TV's kernel config used for the build |
+| `docs/` | Development notes and all measurements |
 
 ## Use of AI
 
-The driver was built, and the app and scripts were written, by an AI agent (Claude Code) under the
-maintainer's direction; the maintainer drove the testing on their own TV (OLED55A1PSA) and is responsible for
-the project. The driver code is Realtek's/LG's original `r8152`; the only change is the receive-buffer patch in
-`driver/patches/`, with the measurements behind it.
+The driver changes, the app and the scripts were written by an AI agent (Claude Code) under the maintainer's
+direction; the maintainer ran the tests on their own TV (OLED55A1PSA) and is responsible for the project. The
+driver changes follow mainline Linux and Realtek's own driver, and each one was measured on the TV before release
+(see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)).
 
 ## License and credits
 
 - GPL-2.0 (see [`LICENSE`](LICENSE)). The `r8152` driver is © Realtek Semiconductor, distributed by LG in the
-  TV's open source package; the code is in [`driver/r8152.c`](driver/r8152.c).
+  TV's open source package ([`driver/r8152.c`](driver/r8152.c)); the RTL8153B setup follows the mainline Linux
+  `r8152` driver.
 - [webOS Homebrew Project](https://github.com/webosbrew) for Homebrew Channel.
 - [LG-USB-2-ETH0](https://github.com/ohmybahgosh/LG-USB-2-ETH0) for the interface swap and Wi-Fi fallback
   logic (MIT, see [`THIRD_PARTY.md`](THIRD_PARTY.md)).
