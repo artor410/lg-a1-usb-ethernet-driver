@@ -496,7 +496,9 @@ cmd_status() {
 RMEM_MAX=4194304
 RMEM_SAVE=/tmp/lg-a1-usb-ethernet.rmem_max
 tune_net() {
-    _cur=$(sysval /proc/sys/net/core/rmem_max) || return 0
+    # cat, not sysval: BusyBox's read gets only the first byte of a /proc/sys file.
+    _cur=$(cat /proc/sys/net/core/rmem_max 2>/dev/null)
+    case "$_cur" in ''|*[!0-9]*) return 0 ;; esac
     [ "$_cur" -lt "$RMEM_MAX" ] || return 0
     [ -e "$RMEM_SAVE" ] || echo "$_cur" > "$RMEM_SAVE"
     echo "$RMEM_MAX" > /proc/sys/net/core/rmem_max && log "net.core.rmem_max $_cur -> $RMEM_MAX"

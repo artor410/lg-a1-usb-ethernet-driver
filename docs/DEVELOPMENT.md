@@ -214,3 +214,7 @@ adapter" (switch), "adapter FIFO full" (`rx_missed`) and "after the adapter" (US
   legacy settings after unplugging the adapter. Effective values are in `dmesg` ("rx agg:", "link-up:").
 - Side note: the PC used for tests once came back from sleep linked at 10 Mbit/s (Realtek "WOL & Shutdown Link
   Speed: 10 Mbps First"); every result was ~9 Mbit/s until the cable was replugged. Check the PC link first.
+
+## v0.7.1 (2026-11-06): rmem_max fix
+- v0.7.0 never raised `net.core.rmem_max`: BusyBox's `read` returns only the first byte of a `/proc/sys` file
+  (the sysctl handler gives EOF on the next byte-sized read), so the value read as "5". `usbeth.sh` uses `cat` now.
