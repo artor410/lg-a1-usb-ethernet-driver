@@ -114,6 +114,7 @@ Measured with `scripts/speed-test.sh` and LAN tests (PC at 1 Gbit/s, HTTP server
   32 × 16 KB: 155–159 Mbit/s; 10 × 32 KB: 202–212; **32 × 32 KB: 214–215** (out-of-order ~600).
   The gain comes from the buffer size; 32 KB is what mainline Linux's r8152 uses for the RTL8153.
 - This became `driver/patches/0001-rx-buffers-32x32k.patch`, applied by `scripts/build-r8152.sh`.
+  (Superseded in v0.7.0: the real cause was the RTL8153B early-size unit; see v0.7.0 below.)
 - `speed.cloudflare.com` starts refusing (HTTP 429) after many back-to-back downloads from the same IP.
 - After installing v0.3.0 through Homebrew Channel's service (from the manifest) and reloading the driver:
   LAN 216 Mbit/s (out-of-order 594); internet (Cloudflare, 50 MB) 182 Mbit/s, versus 111–119 before.
@@ -177,3 +178,39 @@ Measured with `scripts/speed-test.sh` and LAN tests (PC at 1 Gbit/s, HTTP server
   `luna://com.webos.service.systemservice/time/setSystemTime`, 45 s after the driver loads; this also writes the
   RTC. Tested by forcing the clock to 2021: HTTPS 000 → clock set from the network → HTTPS 200. The TV's
   `autoClock` setting was already off and is not changed.
+
+## v0.7.0 (2026-11-06): RTL8153B fixed, lossless bursts, lower latency
+Tools: `tools/netprobe/` (UDP sink/echo/CPU sampler on the TV, burst sender and RTT on the PC). Its `ethstats`
+mode reads the adapter's tally counters through the ethtool ioctl, which split a burst's loss into "before the
+adapter" (switch), "adapter FIFO full" (`rx_missed`) and "after the adapter" (USB/driver/socket).
+- Chip: `PLA_TCR1` version 0x6010 = RTL_VER_09 = **RTL8153B**. LG's v1.08.2 maps versions 8/9 onto the RTL8153A
+  code (`r8153_init`, early size /4, early timeout 250 µs).
+- v0.6.2 lost 41–44% of video-like UDP bursts (each frame sent back to back at 1 Gbit/s; 80 Mbit/s @60 fps up
+  to 200 Mbit/s @120 fps). With pause frames on, the adapter counted every frame and `rx_missed` stayed at 0: the
+  loss was after the adapter. A debug build counted the bytes arriving over USB: all of them arrived, and the
+  driver discarded 24 MB of 52 MB in a 5 s burst. `USB_RX_EARLY_SIZE` counts 8-byte units on the RTL8153B
+  (mainline 65b82d696b9e); /4 let aggregates grow to ~2x the URB, so a frame crossing the URB end was dropped
+  and the next URB was parsed from mid-frame. With /8: 0% loss at 80–200 Mbit/s, TCP 220 → 309 Mbit/s.
+- Pause frames matter: with the fix but `fc=0`, 55% of a 150 Mbit/s burst is lost to adapter FIFO overflow.
+- The rest of mainline's RTL8153B setup was ported (each step reviewed against v4.17/v5.4/v6.6 and Realtek's
+  out-of-tree v2.22.1): RX timer in `USB_RX_EXTRA_AGGR_TMR` (15 µs) with `USB_RX_EARLY_TIMEOUT` at 128 ns and the
+  `USB_UPT_RXDMA_OWN` latch, `RX_THR_B`, U2P3 off, no RTL8153A MAC clock speed-down table, LPM U1/U2 only at
+  SuperSpeed, BMU reset, test IO off on 32QFN. RTL8152/RTL8153A programming is unchanged.
+- RX timer (UDP RTT, 2000 probes, alternated runs): 250 µs legacy → p50 ~0.53 ms idle; 15 µs → ~0.30 ms;
+  50 µs and 100 µs in between. No extra CPU at 15 µs (NET_RX ~10% of CPU0 at 150 Mbit/s in every variant).
+- Buffer size with the fixed timer: TCP ~309 Mbit/s at 16/20/24/32 KB, but RTT under a 100 Mbit/s stream p50
+  0.23 ms at 16 KB, 0.25 ms at 20 KB and 0.42 ms at 32 KB. A page-aligned 16/20 KB URB is one EHCI qTD; with two
+  qTDs a short transfer inside the first stops the queue until the interrupt handler restarts it
+  (`ehci-q.c`). Default now 32 x 16 KB.
+- Pinning the EHCI interrupt (IRQ 65) to CPU2 instead of CPU0 did not help (equal or worse RTT).
+- Not fixed by the driver: 300 Mbit/s at 60 fps (625 KB per frame) loses ~35% in the switch while the TV
+  pauses it; full-speed TCP downloads raise the RTT to ~5 ms (the switch queues during pauses).
+- The app raises `net.core.rmem_max` from 512 KiB to 4 MiB while the driver is loaded (Moonlight asks for
+  ~2.75 MiB of UDP receive buffer) and restores it on unload.
+- Optional module parameters for A/B tests (none needed): `agg_buf_sz` (16384–32768), `fc` (0/1/2),
+  `rx_coalesce_ns`, `eee`, and RTL8153B switches `rx_tmr_8153b`, `rx_early_timeout_ns`, `rx_agg_indicate`,
+  `rx_thr_b`, `init_8153b`, `u2p3`, `mac_clk_spdwn`, `phy_8153b`, `bmu_reset`, `autosuspend`, `dump_regs`,
+  `legacy_extra_aggr_tmr`, `legacy_rx_buf_th`. The chip keeps register values until it loses power, so compare
+  legacy settings after unplugging the adapter. Effective values are in `dmesg` ("rx agg:", "link-up:").
+- Side note: the PC used for tests once came back from sleep linked at 10 Mbit/s (Realtek "WOL & Shutdown Link
+  Speed: 10 Mbps First"); every result was ~9 Mbit/s until the cable was replugged. Check the PC link first.

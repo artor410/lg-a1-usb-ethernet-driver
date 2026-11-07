@@ -490,6 +490,22 @@ cmd_status() {
     echo "default_route=$(ip route show default 2>/dev/null | head -n 1)"
 }
 
+# Game-streaming clients ask for large UDP receive buffers (Moonlight about 2.75 MiB),
+# but webOS caps them at net.core.rmem_max = 512 KiB. Raise the cap while the driver is
+# loaded (it only allows bigger buffers to apps that ask for them) and restore it on unload.
+RMEM_MAX=4194304
+RMEM_SAVE=/tmp/lg-a1-usb-ethernet.rmem_max
+tune_net() {
+    _cur=$(sysval /proc/sys/net/core/rmem_max) || return 0
+    [ "$_cur" -lt "$RMEM_MAX" ] || return 0
+    [ -e "$RMEM_SAVE" ] || echo "$_cur" > "$RMEM_SAVE"
+    echo "$RMEM_MAX" > /proc/sys/net/core/rmem_max && log "net.core.rmem_max $_cur -> $RMEM_MAX"
+}
+untune_net() {
+    [ -r "$RMEM_SAVE" ] || return 0
+    cat "$RMEM_SAVE" > /proc/sys/net/core/rmem_max && rm -f "$RMEM_SAVE"
+}
+
 cmd_load() {
     if ! msg=$(check_compat); then say "load refused: $msg"; exit 1; fi
     if module_loaded; then say "driver already loaded"; return 0; fi
@@ -500,6 +516,7 @@ cmd_load() {
         exit 1
     fi
     say "driver loaded"
+    tune_net
     # Start the watcher at once: it does the eth0 swap as soon as the interface appears.
     want_watcher && start_watcher
     clock_ok || nohup sh "$SELF" clock > /dev/null 2>&1 &
@@ -513,7 +530,7 @@ cmd_unload() {
     if ! module_loaded; then say "driver not loaded"; return 0; fi
     stop_watcher
     is_usb_nic eth0 && swap_out   # give eth0 back to the built-in port before the adapter goes away
-    if out=$(rmmod "$MOD" 2>&1); then say "driver unloaded"; else say "rmmod failed: $out"; exit 1; fi
+    if out=$(rmmod "$MOD" 2>&1); then untune_net; say "driver unloaded"; else say "rmmod failed: $out"; exit 1; fi
 }
 
 cmd_autostart_on() {

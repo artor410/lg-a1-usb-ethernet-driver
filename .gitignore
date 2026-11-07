@@ -1,6 +1,8 @@
 # Local build outputs
 build/
 dist/
+tools/netprobe/netprobe-armv7
+tools/netprobe/netprobe-x86
 # The TV info report contains MAC addresses and details of whoever ran it
 diagnostics/tv-info.txt
 # Old empty clone of the repository (not part of the project)

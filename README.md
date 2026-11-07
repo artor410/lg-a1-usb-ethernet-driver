@@ -4,8 +4,9 @@ The **r8152** driver for **Realtek USB Ethernet adapters (RTL8152/RTL8153)** on 
 **lm21u** platform (e.g. **OLED A1**, 2021), plus a **Homebrew Channel** app to turn it on with the remote.
 
 LG TVs have a 100 Mbit/s Ethernet port. With a gigabit adapter on the TV's USB 2.0 port, the TV goes well past
-that: on the local network it measured **~215 Mbit/s receiving** and **~250 Mbit/s sending**, which helps with
-Plex, Jellyfin, Moonlight and the like.
+that: on the local network it measured **~309 Mbit/s receiving** and **~250 Mbit/s sending**, with a round trip of
+**~0.22 ms** and no loss on game-stream-like bursts up to 200 Mbit/s, which helps with Plex, Jellyfin, Moonlight,
+Sunshine/Apollo and the like.
 
 ## Tested on
 
@@ -15,9 +16,13 @@ Plex, Jellyfin, Moonlight and the like.
 
 - The driver loads cleanly; the TV configures the adapter's network **by itself** (address, route and DNS
   through its own connection manager) and goes online. 1000 Mbit/s link.
-- Local network (PC at 1 Gbit/s): **~215 Mbit/s** receiving and **~250 Mbit/s** sending, versus ~94 Mbit/s on
-  the TV's built-in port. Since v0.3.0 the driver uses larger receive buffers
-  ([`driver/patches/`](driver/patches/)); with the original buffers, receiving topped out at ~152 Mbit/s.
+- Local network (PC at 1 Gbit/s on the same switch), v0.7.0: **~309 Mbit/s** receiving (TCP) and **~250 Mbit/s**
+  sending, versus ~94 Mbit/s on the TV's built-in port and ~152 Mbit/s with LG's unmodified driver.
+- Game streaming (v0.7.0): Sunshine/Apollo send each video frame as a burst at gigabit speed. Bursts of
+  80–200 Mbit/s at 60–120 fps arrive **without loss** (0.2% at 300 Mbit/s @120 fps); up to v0.6.2, 41–44% of
+  such bursts were lost. UDP round trip: **~0.22 ms** idle, **~0.24 ms** while receiving a 100 Mbit/s stream
+  (v0.6.2: ~0.35 and ~0.45 ms). Receiving 150 Mbit/s uses ~10% of one CPU core.
+  See [What v0.7.0 fixed](#what-v070-fixed-in-the-driver).
 - Internet (300 Mbit/s plan, Cloudflare, one 50 MB download): **182–183 Mbit/s** with v0.3.0 and later,
   versus 111–119 Mbit/s with v0.2.0. Browser-based tests such as fast.com come out lower because the TV's
   browser itself is slow.
@@ -29,6 +34,24 @@ Plex, Jellyfin, Moonlight and the like.
   the remote.
 - **Wi-Fi fallback** (v0.5.0): adapter gone → Wi-Fi turned on after 60 s and the TV stayed online through it;
   adapter back → swap redone and Wi-Fi turned off after 30 s. **Speed test** in the app: 183 Mbit/s.
+
+## What v0.7.0 fixed in the driver
+
+The common adapters (and the one tested here) use the **RTL8153B** chip. LG's driver recognizes it but programs it
+like the older RTL8153A ([`driver/patches/`](driver/patches/) has the full patch and its description):
+
+- **Lost bursts.** The chip's "early size" (how much it packs into one USB transfer) is counted in 8-byte units
+  on the RTL8153B; LG's driver wrote 4-byte units, so the chip built transfers up to twice the size of the
+  driver's buffers and the driver silently dropped what did not fit. This was invisible in every counter and cost
+  ~45% of the packets of a video burst. Now set as in mainline Linux.
+- **Latency.** The RTL8153B's receive timer is a different register; LG's driver put a 250 µs delay into a
+  secondary timer instead. Now 15 µs, as in mainline Linux, plus the rest of mainline's RTL8153B setup (USB power
+  saving that can miss transfers turned off, no RTL8153A-only power tables).
+- **Buffers.** 32 receive buffers of 16 KB, the size the TV's USB controller handles in one piece.
+
+Tips for game streaming over this adapter: keep the PC and the TV on the same gigabit switch (the TV uses Ethernet
+flow control to pause the switch during bursts, so a switch that honors pause frames helps); prefer 120 fps over
+60 fps at the same bitrate (half the burst per frame); bitrates up to ~150 Mbit/s are comfortable.
 
 Tried it on another TV? Please open an [issue](https://github.com/artor410/webOS6-usbrealtek-driver/issues)
 with the model, firmware and result.

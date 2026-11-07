@@ -1,0 +1,1958 @@
+Fix the RTL8153B on USB 2.0 and tune r8152 for low latency (LG lm21u TV).
+
+LG's r8152 (v1.08.2) detects the RTL8153B (versions 8/9) but programs it
+like the RTL8153A. On the TV (OLED A1, MStar EHCI, USB 2.0) that caused:
+
+- Lost bursts: USB_RX_EARLY_SIZE counts 8-byte units on the RTL8153B and
+  the driver wrote 4-byte units, so the chip built aggregates up to twice
+  the URB size. A frame crossing the URB end was dropped silently and the
+  next URB was parsed from mid-frame: ~45% of game-stream-like UDP bursts
+  (80-200 Mbit/s, each video frame sent at gigabit line rate) were lost
+  after they had crossed USB. Now /8, as upstream (65b82d696b9e).
+- Latency: the RTL8153B's RX timer is USB_RX_EXTRA_AGGR_TMR; the driver
+  put 250 us into USB_RX_EARLY_TIMEOUT instead. Now EARLY_TIMEOUT = 128 ns,
+  EXTRA_AGGR_TMR = 15 us and USB_UPT_RXDMA_OWN latches the change, as
+  upstream. Other RTL8153B init from upstream: U2P3 off (809a7fc6593f),
+  no RTL8153A MAC clock speed-down table (4b5dc1a94d4f), LPM U1/U2 only at
+  SuperSpeed (a0246dafe684), RX_THR_B, BMU reset, test IO off on 32QFN.
+- RX buffers: 32 x 16 KiB (was 10 x 16 KiB). 16 KiB fits one EHCI qTD.
+
+Measured on the TV (PC on the same gigabit switch), before -> after:
+TCP 220 -> 307 Mbit/s; UDP bursts 80-200 Mbit/s: 41-44% -> 0% lost
+(300 Mbit/s @120 fps: 0.3%); UDP RTT p50 idle 0.35 -> 0.23 ms, under a
+100 Mbit/s stream 0.45 -> 0.23 ms; CPU for 150 Mbit/s ~10% of one core.
+
+Also: upstream fixes (NAPI disable ordering, RX budget, EPROTO handling,
+checksum flags, TX watchdog stamp, napi_complete_done), RX buffers kept
+across ifdown/ifup with a smaller-buffer fallback, a link report and RX
+diagnostics in the ethtool statistics. RTL8152/RTL8153A programming is
+unchanged. Module parameters (all optional) exist for A/B tests: see
+docs/DEVELOPMENT.md.
+
+--- a/r8152.c	2026-11-06 22:59:32.312821400 -0300
++++ b/r8152.c	2026-11-06 22:59:32.356002100 -0300
+@@ -49,11 +49,18 @@
+ #define PLA_FMC			0xc0b4
+ #define PLA_CFG_WOL		0xc0b6
+ #define PLA_TEREDO_CFG		0xc0bc
++#define PLA_TEREDO_WAKE_BASE	0xc0c4	/* RTL8153B */
+ #define PLA_MAR			0xcd00
+ #define PLA_BACKUP		0xd000
+ #define PAL_BDC_CR		0xd1a0
+ #define PLA_TEREDO_TIMER	0xd2cc
+ #define PLA_REALWOW_TIMER	0xd2e8
++#define PLA_SUSPEND_FLAG	0xd38a
++#define PLA_INDICATE_FALG	0xd38c
++#define PLA_EXTRA_STATUS	0xd398
++#define PLA_PKG_ID		0xdc00	/* RTL8153B: bit 5 = 32QFN */
++#define PLA_EFUSE_DATA		0xdd00
++#define PLA_EFUSE_CMD		0xdd02
+ #define PLA_LEDSEL		0xdd90
+ #define PLA_LED_FEATURE		0xdd92
+ #define PLA_PHYAR		0xde00
+@@ -103,7 +110,12 @@
+ #define USB_CSR_DUMMY2		0xb466
+ #define USB_DEV_STAT		0xb808
+ #define USB_CONNECT_TIMER	0xcbf8
++#define USB_MSC_TIMER		0xcbfc
++#define USB_U1U2_TIMER		0xd4da	/* RTL8153B */
+ #define USB_BURST_SIZE		0xcfc0
++#define USB_LPM_CONFIG		0xcfd8	/* RTL8153B */
++#define USB_MISC_2		0xcfff	/* RTL8153B */
++#define USB_FW_CTRL		0xd334	/* RTL8153B */
+ #define USB_USB_CTRL		0xd406
+ #define USB_PHY_CTRL		0xd408
+ #define USB_TX_AGG		0xd40a
+@@ -111,9 +123,13 @@
+ #define USB_USB_TIMER		0xd428
+ #define USB_RX_EARLY_TIMEOUT	0xd42c
+ #define USB_RX_EARLY_SIZE	0xd42e
+-#define USB_PM_CTRL_STATUS	0xd432
++#define USB_PM_CTRL_STATUS	0xd432	/* RTL8152 */
++#define USB_RX_EXTRA_AGGR_TMR	0xd432	/* RTL8153B */
+ #define USB_TX_DMA		0xd434
++#define USB_UPT_RXDMA_OWN	0xd437	/* RTL8153B */
+ #define USB_TOLERANCE		0xd490
++#define USB_BMU_RESET		0xd4b0
++#define USB_FW_TASK		0xd4e8	/* RTL8153B */
+ #define USB_LPM_CTRL		0xd41a
+ #define USB_UPS_CTRL		0xd800
+ #define USB_MISC_0		0xd81a
+@@ -140,6 +156,7 @@
+ #define OCP_EEE_AR		0xa41a
+ #define OCP_EEE_DATA		0xa41c
+ #define OCP_PHY_STATUS		0xa420
++#define OCP_NCTL_CFG		0xa42c
+ #define OCP_POWER_CFG		0xa430
+ #define OCP_EEE_CFG		0xa432
+ #define OCP_SRAM_ADDR		0xa436
+@@ -149,9 +166,11 @@
+ #define OCP_EEE_ADV		0xa5d0
+ #define OCP_EEE_LPABLE		0xa5d2
+ #define OCP_PHY_STATE		0xa708		/* nway state for 8153 */
++#define OCP_ADC_IOFFSET		0xbcfc
+ #define OCP_ADC_CFG		0xbc06
+ 
+ /* SRAM Register */
++#define SRAM_GREEN_CFG		0x8011
+ #define SRAM_LPF_CFG		0x8012
+ #define SRAM_10M_AMP1		0x8080
+ #define SRAM_10M_AMP2		0x8082
+@@ -265,6 +284,7 @@
+ /* PLA_PHY_PWR */
+ #define TX_10M_IDLE_EN		0x0080
+ #define PFM_PWM_SWITCH		0x0040
++#define TEST_IO_OFF		BIT(4)	/* RTL8153B */
+ 
+ /* PLA_MAC_PWR_CTRL */
+ #define D3_CLK_GATED_EN		0x00004000
+@@ -274,8 +294,10 @@
+ 
+ /* PLA_MAC_PWR_CTRL2 */
+ #define EEE_SPDWN_RATIO		0x8007
++#define MAC_CLK_SPDWN_EN	BIT(15)
+ 
+ /* PLA_MAC_PWR_CTRL3 */
++#define PLA_MCU_SPDWN_EN	BIT(14)	/* RTL8153B */
+ #define PKT_AVAIL_SPDWN_EN	0x0100
+ #define SUSPEND_SPDWN_EN	0x0004
+ #define U1U2_SPDWN_EN		0x0002
+@@ -306,6 +328,33 @@
+ /* PLA_BOOT_CTRL */
+ #define AUTOLOAD_DONE		0x0002
+ 
++/* PLA_SUSPEND_FLAG */
++#define LINK_CHG_EVENT		BIT(0)
++
++/* PLA_INDICATE_FALG */
++#define UPCOMING_RUNTIME_D3	BIT(0)
++
++/* PLA_EXTRA_STATUS */
++#define LINK_CHANGE_FLAG	BIT(8)
++
++/* PLA_EFUSE_CMD */
++#define EFUSE_READ_CMD		BIT(15)
++#define EFUSE_DATA_BIT16	BIT(7)
++
++/* USB_LPM_CONFIG */
++#define LPM_U1U2_EN		BIT(0)
++
++/* USB_MISC_2 */
++#define UPS_FORCE_PWR_DOWN	BIT(0)
++
++/* USB_UPT_RXDMA_OWN */
++#define OWN_UPDATE		BIT(0)
++#define OWN_CLEAR		BIT(1)
++
++/* USB_BMU_RESET */
++#define BMU_RESET_EP_IN		0x01
++#define BMU_RESET_EP_OUT	0x02
++
+ /* USB_USB2PHY */
+ #define USB2PHY_SUSPEND		0x0001
+ #define USB2PHY_L1		0x0002
+@@ -332,6 +381,7 @@
+ #define RX_THR_SUPPER		0x0c350180
+ #define RX_THR_HIGH		0x7a120180
+ #define RX_THR_SLOW		0xffff0180
++#define RX_THR_B		0x00010001	/* RTL8153B */
+ 
+ /* USB_TX_DMA */
+ #define TEST_MODE_DISABLE	0x00000001
+@@ -353,6 +403,8 @@
+ /* USB_POWER_CUT */
+ #define PWR_EN			0x0001
+ #define PHASE2_EN		0x0008
++#define UPS_EN			BIT(4)	/* RTL8153B */
++#define USP_PREWAKE		BIT(5)	/* RTL8153B */
+ 
+ /* USB_MISC_0 */
+ #define PCUT_STATUS		0x0001
+@@ -361,6 +413,10 @@
+ #define COALESCE_SUPER		 85000U
+ #define COALESCE_HIGH		250000U
+ #define COALESCE_SLOW		524280U
++/* RTL8153B default for any USB speed, in USB_RX_EXTRA_AGGR_TMR (upstream
++ * and Realtek r8153b_init(): "tp->coalesce = 15000; 15 us").
++ */
++#define COALESCE_8153B		 15000U
+ 
+ /* USB_WDT11_CTRL */
+ #define TIMER11_EN		0x0001
+@@ -387,9 +443,17 @@
+ 
+ /* OCP_PHY_STATUS */
+ #define PHY_STAT_MASK		0x0007
++#define PHY_STAT_EXT_INIT	2
+ #define PHY_STAT_LAN_ON		3
+ #define PHY_STAT_PWRDN		5
+ 
++/* OCP_NCTL_CFG */
++#define PGA_RETURN_EN		BIT(1)
++
++/* SRAM_GREEN_CFG */
++#define GREEN_ETH_EN		BIT(15)
++#define R_TUNE_EN		BIT(11)
++
+ /* OCP_POWER_CFG */
+ #define EEE_CLKDIV_EN		0x8000
+ #define EN_ALDPS		0x0004
+@@ -463,7 +527,7 @@
+ };
+ 
+ #define RTL8152_MAX_TX		4
+-#define RTL8152_MAX_RX		10
++#define RTL8152_MAX_RX		32
+ #define INTBUFSIZE		2
+ #define CRC_SIZE		4
+ #define TX_ALIGN		4
+@@ -499,6 +563,7 @@
+ 	SELECTIVE_SUSPEND,
+ 	PHY_RESET,
+ 	SCHEDULE_NAPI,
++	RX_EPROTO,
+ };
+ 
+ /* Define these values to match your device */
+@@ -574,6 +639,35 @@
+ 
+ struct r8152;
+ 
++/* Driver RX diagnostics, exported after the chip tally counters by
++ * ETHTOOL_GSTATS (rtl8152_gstrings). Monotonic since probe. The urb_*
++ * fields are written by read_bulk_callback() (serialised by the HCD
++ * giveback), the agg_* fields by rx_bottom() (NAPI). Diagnostics only: the
++ * u64 reads in rtl8152_get_ethtool_stats() are not u64_stats_sync protected,
++ * so on 32-bit ARM a read racing an update may be torn (off by 2^32 for one
++ * snapshot). Take the before/after deltas over a quiet moment.
++ */
++enum rtl_rx_len_bin {
++	RX_BIN_RUNT = 0,	/* < ETH_ZLEN: ZLP or runt, not parsed */
++	RX_BIN_2K,		/* < 2 KiB */
++	RX_BIN_8K,		/* < 8 KiB */
++	RX_BIN_16K,		/* < 16 KiB */
++	RX_BIN_20K,		/* < 20 KiB: ends in the first EHCI qTD */
++	RX_BIN_GE20K,		/* >= 20 KiB, below the early size */
++	RX_BIN_ESZ,		/* >= early size: closed by size, not timer */
++	RX_BIN_NUM
++};
++
++struct rtl_rx_diag {
++	u64 urb_bytes;		/* status 0 completions, actual_length sum */
++	u64 urb_bin[RX_BIN_NUM];
++	u64 urb_eproto;
++	u64 urb_err;		/* other errors (not unlink/shutdown) */
++	u64 agg_split;		/* plausible frame crossing the URB end */
++	u64 agg_bad_desc;	/* rx_desc length < ETH_ZLEN or > PLA_RMS */
++	u64 agg_drop_bytes;	/* URB bytes left unparsed by those two */
++};
++
+ struct rx_agg {
+ 	struct list_head list;
+ 	struct urb *urb;
+@@ -620,6 +714,8 @@
+ 		bool (*in_nway)(struct r8152 *);
+ 	} rtl_ops;
+ 
++	struct rtl_rx_diag rxd;
++
+ 	int intr_interval;
+ 	u32 saved_wolopts;
+ 	u32 msg_enable;
+@@ -654,11 +750,163 @@
+  * The RTL chips use a 64 element hash table based on the Ethernet CRC.
+  */
+ static const int multicast_filter_limit = 32;
++/* Aggregation buffer size in use (RX/TX). Set at probe from agg_buf_sz_req
++ * and lowered by alloc_all_mem() if that size cannot be allocated.
++ */
+ static unsigned int agg_buf_sz = 16384;
++/* Requested size, module parameter "agg_buf_sz". Validated at probe.
++ * Default 16384: a page-aligned 16384 or 20480 buffer fits one EHCI qTD
++ * (5 x 4 KiB) while 24576/32768 need two, and a short transfer inside the
++ * first qTD stops the EHCI queue until the interrupt handler restarts it.
++ * Measured on the LG TV (RTL8153B, USB 2.0): TCP ~309 Mbit/s at every size,
++ * but UDP RTT under a 100 Mbit/s stream p50 0.23 ms at 16384 vs 0.42 ms at
++ * 32768. Upstream also limits the RTL8153A to 16 KiB on USB 2.0 (f91a50d8b51b).
++ */
++static unsigned int agg_buf_sz_req = 16384;
++module_param_named(agg_buf_sz, agg_buf_sz_req, uint, 0444);
++MODULE_PARM_DESC(agg_buf_sz, "RX/TX aggregation buffer bytes (16384-32768, 4 KiB steps; default 16384)");
++
++/* 802.3x pause advertisement: 0 = off, 1 = symmetric + asymmetric (stock),
++ * 2 = asymmetric only (may send PAUSE, does not act on received PAUSE).
++ * Takes effect at the next autonegotiation (ndo_open / resume restart it).
++ */
++static int fc = 1;
++module_param(fc, int, 0444);
++MODULE_PARM_DESC(fc, "Pause advertisement: 0=off, 1=sym+asym (default), 2=asym only");
++
++/* RX aggregation timeout override in ns, written as ns / 8 to the timer
++ * that ends a partly filled aggregate: USB_RX_EXTRA_AGGR_TMR on the RTL8153B
++ * with rx_tmr_8153b, USB_RX_EARLY_TIMEOUT otherwise.
++ * -1 (default) uses tp->coalesce (driver default 15000 on the RTL8153B with
++ * rx_tmr_8153b, else 250000 on USB 2.0, or the ETHTOOL_SCOALESCE value).
++ * A value >= 0 overrides both; it is clamped to 8..COALESCE_SLOW and takes
++ * effect at the next link-up (link bounce).
++ */
++static int rx_coalesce_ns = -1;
++module_param(rx_coalesce_ns, int, 0644);
++MODULE_PARM_DESC(rx_coalesce_ns, "RX aggregation timeout in ns (-1 = driver default: 15000 on RTL8153B, 250000 on others at USB 2.0)");
++
++/* RTL8153B (RTL_VER_08/09) options. Each one isolates one change against
++ * the LG v1.08.2 behaviour (which drives this chip with the RTL8153A code)
++ * so it can be A/B tested on the TV. All are applied at probe/link-up.
++ */
++
++/* Upstream 65b82d696b9e: the RTL8153B times out a partly filled aggregate
++ * with USB_RX_EXTRA_AGGR_TMR (coalesce / 8, default 15 us) and keeps
++ * USB_RX_EARLY_TIMEOUT fixed and short. 0 = LG: coalesce (250 us at USB 2.0)
++ * in USB_RX_EARLY_TIMEOUT, USB_RX_EXTRA_AGGR_TMR left at its reset value.
++ */
++static bool rx_tmr_8153b = true;
++module_param(rx_tmr_8153b, bool, 0444);
++MODULE_PARM_DESC(rx_tmr_8153b, "RTL8153B: RX timeout in USB_RX_EXTRA_AGGR_TMR, 15 us default (upstream); 0 = 250 us in USB_RX_EARLY_TIMEOUT (LG)");
++
++/* Fixed USB_RX_EARLY_TIMEOUT with rx_tmr_8153b: 128 ns upstream, 1264 ns in
++ * Realtek's out-of-tree v2.22.1.
++ */
++static int rx_early_timeout_ns = 128;
++module_param(rx_early_timeout_ns, int, 0444);
++MODULE_PARM_DESC(rx_early_timeout_ns, "RTL8153B: fixed USB_RX_EARLY_TIMEOUT in ns with rx_tmr_8153b (128 upstream, 1264 Realtek)");
++
++/* Upstream 9fae54186c64: write OWN_UPDATE | OWN_CLEAR to USB_UPT_RXDMA_OWN
++ * after CR_RE | CR_TE so the RX DMA reloads the aggregation settings, and
++ * restart TX/RX when ETHTOOL_SCOALESCE or the MTU changes them.
++ */
++static bool rx_agg_indicate = true;
++module_param(rx_agg_indicate, bool, 0444);
++MODULE_PARM_DESC(rx_agg_indicate, "RTL8153B: latch RX aggregation settings with USB_UPT_RXDMA_OWN (upstream; 0 = LG)");
++
++/* Upstream rtl8153b_up(): USB_RX_BUF_TH = RX_THR_B. LG never writes it. */
++static bool rx_thr_b = true;
++module_param(rx_thr_b, bool, 0444);
++MODULE_PARM_DESC(rx_thr_b, "RTL8153B: USB_RX_BUF_TH = 0x00010001 at up (upstream; 0 = reset value, LG)");
++
++/* The chip keeps its OCP registers across rmmod/insmod and USB reset until
++ * it loses power, so the legacy switches (rx_tmr_8153b=0, rx_thr_b=0) only
++ * skip a write and inherit what an earlier load left. These restore the
++ * cold values recorded from the "probe pre-autoload" dump of a cold-plugged
++ * adapter: legacy_extra_aggr_tmr is written to USB_RX_EXTRA_AGGR_TMR with
++ * rx_tmr_8153b=0 (-1 = leave as is), legacy_rx_buf_th to USB_RX_BUF_TH with
++ * rx_thr_b=0 (0 = leave as is). RTL8153B only.
++ */
++static int legacy_extra_aggr_tmr = -1;
++module_param(legacy_extra_aggr_tmr, int, 0444);
++MODULE_PARM_DESC(legacy_extra_aggr_tmr, "RTL8153B with rx_tmr_8153b=0: raw USB_RX_EXTRA_AGGR_TMR value to restore (cold value; -1 = leave, default)");
++
++static uint legacy_rx_buf_th;
++module_param(legacy_rx_buf_th, uint, 0444);
++MODULE_PARM_DESC(legacy_rx_buf_th, "RTL8153B with rx_thr_b=0: raw USB_RX_BUF_TH value to restore (cold value; 0 = leave, default)");
++
++/* Upstream 93fe9b183840 BMU reset, split from init_8153b so it can be
++ * bisected on its own (the only init_8153b item on the RX data path).
++ */
++static bool bmu_reset = true;
++module_param(bmu_reset, bool, 0444);
++MODULE_PARM_DESC(bmu_reset, "RTL8153B with init_8153b: reset the BMU (rx/tx FIFO) at init, down and OOB (upstream, default 1)");
++
++/* RTL8153B register dumps at probe and at every link-up (about 30 OCP
++ * control transfers with tp->control held). For test builds; 0 = quiet.
++ */
++static bool dump_regs;
++module_param(dump_regs, bool, 0644);
++MODULE_PARM_DESC(dump_regs, "RTL8153B: dump RX aggregation/power registers at probe and link-up (default 0)");
++
++/* Upstream r8153b_init()/rtl8153b_up()/rtl8153b_down() instead of the
++ * RTL8153A r8153_init(): U1/U2 through USB_LPM_CONFIG and never at high
++ * speed (a0246dafe684) instead of USB_TOLERANCE, RTL8153B power cut, UPS
++ * and queue-wake off, test IO off on 32QFN (d7f1b59655ef), BMU reset
++ * (93fe9b183840), no RTL8153A USB PHY/LPM/AFE/watchdog/LED writes.
++ */
++static bool init_8153b = true;
++module_param(init_8153b, bool, 0444);
++MODULE_PARM_DESC(init_8153b, "RTL8153B: upstream RTL8153B init/up/down (default); 0 = RTL8153A path (LG)");
++
++/* Upstream 809a7fc6593f: "Enable U2P3 may miss zero packet for bulk-in." */
++static bool u2p3_8153b;
++module_param_named(u2p3, u2p3_8153b, bool, 0444);
++MODULE_PARM_DESC(u2p3, "RTL8153B: allow the USB 2.0 PHY U2P3 power state (LG); default 0 (upstream)");
++
++/* MAC clock speed-down on the RTL8153B: 0 = MAC_CLK_SPDWN_EN off (Realtek
++ * v2.22.1 r8153b_init), 1 = on (upstream r8153b_init), 2 = the RTL8153A
++ * PLA_MAC_PWR_CTRL..4 table (LG; 4b5dc1a94d4f: the RTL8153B table differs).
++ * With 0 and 1, PLA_MCU_SPDWN_EN is off while TX/RX run (08997b5eec08).
++ */
++static int mac_clk_spdwn;
++module_param(mac_clk_spdwn, int, 0444);
++MODULE_PARM_DESC(mac_clk_spdwn, "RTL8153B MAC clock speed-down: 0=off (Realtek, default), 1=on (upstream), 2=RTL8153A table (LG; wrong for RTL8153B per upstream 4b5dc1a94d4f)");
++
++/* Upstream r8153b_hw_phy_cfg() subset (ADC bias from efuse, R-tune, PGA
++ * return, green ethernet) instead of the RTL8153A PHY SRAM tuning. Off by
++ * default: the TV link shows no PHY errors (tally rx_errors/align_errors 0).
++ */
++static bool phy_8153b;
++module_param(phy_8153b, bool, 0444);
++MODULE_PARM_DESC(phy_8153b, "RTL8153B: upstream RTL8153B PHY parameters instead of the RTL8153A ones (LG, default)");
++
++/* RTL8153B USB runtime autosuspend. Waking the adapter costs >= 20 ms of
++ * USB 2.0 resume signalling on the first packet after idle. The setting
++ * lives in the usb_device and outlives the module, so probe sets it both
++ * ways: 0 forbids it (power/control = on), 1 allows it (power/control =
++ * auto). Userspace may still change it afterwards.
++ */
++static bool rtl_autosuspend;
++module_param_named(autosuspend, rtl_autosuspend, bool, 0444);
++MODULE_PARM_DESC(autosuspend, "RTL8153B: USB runtime autosuspend at probe: 0 = power/control on (default), 1 = auto");
+ 
+ #define RTL_LIMITED_TSO_SIZE	(agg_buf_sz - sizeof(struct tx_desc) - \
+ 				 VLAN_ETH_HLEN - VLAN_HLEN)
+ 
++/* RTL8153B (PLA_TCR1 0x6000/0x6010). LG v1.08.2 handles it as an RTL8153A. */
++static inline bool rtl_8153b(struct r8152 *tp)
++{
++	return tp->version == RTL_VER_08 || tp->version == RTL_VER_09;
++}
++
++/* The upstream RTL8153B init/up/down paths are in use (init_8153b). */
++static inline bool rtl_8153b_init(struct r8152 *tp)
++{
++	return rtl_8153b(tp) && init_8153b;
++}
++
+ static
+ int get_registers(struct r8152 *tp, u16 value, u16 index, u16 size, void *data)
+ {
+@@ -971,6 +1219,25 @@
+ 	ocp_reg_write(tp, OCP_SRAM_DATA, data);
+ }
+ 
++static u16 sram_read(struct r8152 *tp, u16 addr)
++{
++	ocp_reg_write(tp, OCP_SRAM_ADDR, addr);
++	return ocp_reg_read(tp, OCP_SRAM_DATA);
++}
++
++/* 17-bit efuse word (upstream r8152_efuse_read()) */
++static u32 r8152_efuse_read(struct r8152 *tp, u8 addr)
++{
++	u32 ocp_data;
++
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_EFUSE_CMD, EFUSE_READ_CMD | addr);
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_EFUSE_CMD);
++	ocp_data = (ocp_data & EFUSE_DATA_BIT16) << 9;	/* data of bit16 */
++	ocp_data |= ocp_read_word(tp, MCU_TYPE_PLA, PLA_EFUSE_DATA);
++
++	return ocp_data;
++}
++
+ static int read_mii_word(struct net_device *netdev, int phy_id, int reg)
+ {
+ 	struct r8152 *tp = netdev_priv(netdev);
+@@ -1098,6 +1365,46 @@
+ 	return ret;
+ }
+ 
++/* Room the chip may still fill after crossing the early size: one
++ * max-size frame plus its rx descriptor and the 8-byte alignment.
++ */
++#define rx_reserved_size(x)	((x) + VLAN_ETH_HLEN + CRC_SIZE + \
++				 sizeof(struct rx_desc) + RX_ALIGN)
++
++/* Bulk-in completion length histogram (ETHTOOL_GSTATS rx_urb_*). The 20 KiB
++ * bin edge is the EHCI per-qTD limit for a page-aligned buffer: a 24/32 KiB
++ * URB spans two qTDs and a transfer ending in the first one stops the queue.
++ * RX_BIN_ESZ counts aggregates the chip closed on USB_RX_EARLY_SIZE (the
++ * last frame lands between the early size and agg_buf_sz); the bins below
++ * it are aggregates closed by the timer.
++ */
++static void rtl_rx_count_urb(struct r8152 *tp, unsigned int len)
++{
++	struct rtl_rx_diag *d = &tp->rxd;
++	enum rtl_rx_len_bin bin;
++	/* early size in bytes, rounded down to the RTL8153B 8-byte unit */
++	unsigned int esz = (agg_buf_sz -
++			    rx_reserved_size(tp->netdev->mtu)) & ~7U;
++
++	if (len < ETH_ZLEN)
++		bin = RX_BIN_RUNT;
++	else if (len >= esz)
++		bin = RX_BIN_ESZ;
++	else if (len < 2048)
++		bin = RX_BIN_2K;
++	else if (len < 8192)
++		bin = RX_BIN_8K;
++	else if (len < 16384)
++		bin = RX_BIN_16K;
++	else if (len < 20480)
++		bin = RX_BIN_20K;
++	else
++		bin = RX_BIN_GE20K;
++
++	d->urb_bin[bin]++;
++	d->urb_bytes += len;
++}
++
+ static void read_bulk_callback(struct urb *urb)
+ {
+ 	struct net_device *netdev;
+@@ -1130,6 +1437,7 @@
+ 
+ 	switch (status) {
+ 	case 0:
++		rtl_rx_count_urb(tp, urb->actual_length);
+ 		if (urb->actual_length < ETH_ZLEN)
+ 			break;
+ 
+@@ -1145,10 +1453,27 @@
+ 	case -ENOENT:
+ 		return;	/* the urb is in unlink state */
+ 	case -ETIME:
++		tp->rxd.urb_err++;
+ 		if (net_ratelimit())
+ 			netdev_warn(netdev, "maybe reset is needed?\n");
+ 		break;
++	case -EPROTO:
++		tp->rxd.urb_eproto++;
++		/* Upstream baf33d7a7564: do not resubmit from the completion
++		 * handler. During an unplug or a bus fault every resubmitted
++		 * URB fails at once with -EPROTO, which would loop in softirq
++		 * on CPU0. Park the buffer; the worker kicks NAPI one jiffy
++		 * later and rx_bottom() resubmits it.
++		 */
++		urb->actual_length = 0;
++		spin_lock(&tp->rx_lock);
++		list_add_tail(&agg->list, &tp->rx_done);
++		spin_unlock(&tp->rx_lock);
++		set_bit(RX_EPROTO, &tp->flags);
++		schedule_delayed_work(&tp->schedule, 1);
++		return;
+ 	default:
++		tp->rxd.urb_err++;
+ 		if (net_ratelimit())
+ 			netdev_warn(netdev, "Rx status %d\n", status);
+ 		break;
+@@ -1303,6 +1628,55 @@
+ 	tp->intr_buff = NULL;
+ }
+ 
++static int alloc_agg_bufs(struct r8152 *tp, unsigned int size, gfp_t gfp,
++			  int node)
++{
++	int i;
++	u8 *buf;
++
++	for (i = 0; i < RTL8152_MAX_RX; i++) {
++		buf = kmalloc_node(size, gfp, node);
++		if (buf && buf != rx_agg_align(buf)) {
++			kfree(buf);
++			buf = kmalloc_node(size + RX_ALIGN, gfp, node);
++		}
++		if (!buf)
++			return -ENOMEM;
++		tp->rx_info[i].buffer = buf;
++		tp->rx_info[i].head = rx_agg_align(buf);
++	}
++
++	for (i = 0; i < RTL8152_MAX_TX; i++) {
++		buf = kmalloc_node(size, gfp, node);
++		if (buf && buf != tx_agg_align(buf)) {
++			kfree(buf);
++			buf = kmalloc_node(size + TX_ALIGN, gfp, node);
++		}
++		if (!buf)
++			return -ENOMEM;
++		tp->tx_info[i].buffer = buf;
++		tp->tx_info[i].head = tx_agg_align(buf);
++	}
++
++	return 0;
++}
++
++static void free_agg_bufs(struct r8152 *tp)
++{
++	int i;
++
++	for (i = 0; i < RTL8152_MAX_RX; i++) {
++		kfree(tp->rx_info[i].buffer);
++		tp->rx_info[i].buffer = NULL;
++		tp->rx_info[i].head = NULL;
++	}
++	for (i = 0; i < RTL8152_MAX_TX; i++) {
++		kfree(tp->tx_info[i].buffer);
++		tp->tx_info[i].buffer = NULL;
++		tp->tx_info[i].head = NULL;
++	}
++}
++
+ static int alloc_all_mem(struct r8152 *tp)
+ {
+ 	struct net_device *netdev = tp->netdev;
+@@ -1310,67 +1684,72 @@
+ 	struct usb_host_interface *alt = intf->cur_altsetting;
+ 	struct usb_host_endpoint *ep_intr = alt->endpoint + 2;
+ 	struct urb *urb;
+-	int node, i;
+-	u8 *buf;
++	int node, i, s;
++	/* Sizes to try, largest first: the requested size, then 16 KB. With
++	 * SLUB a 32 KB buffer is an order-3 page block, 16 KB order-2. In 4.4
++	 * a GFP_KERNEL order<=3 request loops in reclaim/compaction and may
++	 * call the OOM killer instead of failing, so only the last size may
++	 * try that hard.
++	 */
++	const unsigned int sizes[] = { agg_buf_sz_req, 16384 };
++	const int n = agg_buf_sz_req > 16384 ? 2 : 1;
+ 
+ 	node = netdev->dev.parent ? dev_to_node(netdev->dev.parent) : -1;
+ 
+ 	spin_lock_init(&tp->rx_lock);
+ 	spin_lock_init(&tp->tx_lock);
+ 	INIT_LIST_HEAD(&tp->tx_free);
++	INIT_LIST_HEAD(&tp->rx_done);
+ 	skb_queue_head_init(&tp->tx_queue);
+ 	skb_queue_head_init(&tp->rx_queue);
+ 
+-	for (i = 0; i < RTL8152_MAX_RX; i++) {
+-		buf = kmalloc_node(agg_buf_sz, GFP_KERNEL, node);
+-		if (!buf)
+-			goto err1;
++	for (s = 0; s < n; s++) {
++		gfp_t gfp = GFP_KERNEL;
+ 
+-		if (buf != rx_agg_align(buf)) {
+-			kfree(buf);
+-			buf = kmalloc_node(agg_buf_sz + RX_ALIGN, GFP_KERNEL,
+-					   node);
+-			if (!buf)
+-				goto err1;
+-		}
++		if (s < n - 1)
++			gfp |= __GFP_NORETRY | __GFP_NOWARN;
++		if (!alloc_agg_bufs(tp, sizes[s], gfp, node))
++			break;
++		free_agg_bufs(tp);
++	}
++	if (s == n)
++		goto err1;
++
++	/* Read by rx submit, tx fill and features_check; rx early size and
++	 * tx_qlen are recomputed by rtl8153_enable() at every link-up and
++	 * post_reset. Global: one adapter assumed (as on the TV).
++	 */
++	agg_buf_sz = sizes[s];
++	netif_set_gso_max_size(netdev, RTL_LIMITED_TSO_SIZE);
++	if (s)
++		netdev_warn(netdev, "low memory: using %u-byte USB buffers\n",
++			    agg_buf_sz);
++	/* The EHCI qTD analysis assumes page-aligned RX buffers: one qTD
++	 * covers up to 5 pages minus the head's page offset.
++	 */
++	dev_info(&intf->dev, "rx buf %u B, head page offset %lu, qTDs %lu\n",
++		 agg_buf_sz, offset_in_page(tp->rx_info[0].head),
++		 DIV_ROUND_UP(agg_buf_sz + offset_in_page(tp->rx_info[0].head),
++			      5 * PAGE_SIZE));
+ 
++	for (i = 0; i < RTL8152_MAX_RX; i++) {
+ 		urb = usb_alloc_urb(0, GFP_KERNEL);
+-		if (!urb) {
+-			kfree(buf);
++		if (!urb)
+ 			goto err1;
+-		}
+ 
+ 		INIT_LIST_HEAD(&tp->rx_info[i].list);
+ 		tp->rx_info[i].context = tp;
+ 		tp->rx_info[i].urb = urb;
+-		tp->rx_info[i].buffer = buf;
+-		tp->rx_info[i].head = rx_agg_align(buf);
+ 	}
+ 
+ 	for (i = 0; i < RTL8152_MAX_TX; i++) {
+-		buf = kmalloc_node(agg_buf_sz, GFP_KERNEL, node);
+-		if (!buf)
+-			goto err1;
+-
+-		if (buf != tx_agg_align(buf)) {
+-			kfree(buf);
+-			buf = kmalloc_node(agg_buf_sz + TX_ALIGN, GFP_KERNEL,
+-					   node);
+-			if (!buf)
+-				goto err1;
+-		}
+-
+ 		urb = usb_alloc_urb(0, GFP_KERNEL);
+-		if (!urb) {
+-			kfree(buf);
++		if (!urb)
+ 			goto err1;
+-		}
+ 
+ 		INIT_LIST_HEAD(&tp->tx_info[i].list);
+ 		tp->tx_info[i].context = tp;
+ 		tp->tx_info[i].urb = urb;
+-		tp->tx_info[i].buffer = buf;
+-		tp->tx_info[i].head = tx_agg_align(buf);
+ 
+ 		list_add_tail(&tp->tx_info[i].list, &tp->tx_free);
+ 	}
+@@ -1674,8 +2053,16 @@
+ 			  (usb_complete_t)write_bulk_callback, agg);
+ 
+ 	ret = usb_submit_urb(agg->urb, GFP_ATOMIC);
+-	if (ret < 0)
++	if (ret < 0) {
+ 		usb_autopm_put_interface_async(tp->intf);
++	} else {
++		/* Upstream 833dcd75d54f: TX makes progress while the queue is
++		 * stopped (e.g. held off by PAUSE frames); refresh the
++		 * watchdog stamp so dev_watchdog() does not reset the device.
++		 * 4.4 has no netif_trans_update().
++		 */
++		netdev_get_tx_queue(tp->netdev, 0)->trans_start = jiffies;
++	}
+ 
+ out_tx_fill:
+ 	return ret;
+@@ -1695,13 +2082,11 @@
+ 	if (opts2 & RD_IPV4_CS) {
+ 		if (opts3 & IPF)
+ 			checksum = CHECKSUM_NONE;
+-		else if ((opts2 & RD_UDP_CS) && (opts3 & UDPF))
+-			checksum = CHECKSUM_NONE;
+-		else if ((opts2 & RD_TCP_CS) && (opts3 & TCPF))
+-			checksum = CHECKSUM_NONE;
+-		else
++		else if ((opts2 & RD_UDP_CS) && !(opts3 & UDPF))
+ 			checksum = CHECKSUM_UNNECESSARY;
+-	} else if (RD_IPV6_CS) {
++		else if ((opts2 & RD_TCP_CS) && !(opts3 & TCPF))
++			checksum = CHECKSUM_UNNECESSARY;
++	} else if (opts2 & RD_IPV6_CS) {
+ 		if ((opts2 & RD_UDP_CS) && !(opts3 & UDPF))
+ 			checksum = CHECKSUM_UNNECESSARY;
+ 		else if ((opts2 & RD_TCP_CS) && !(opts3 & TCPF))
+@@ -1712,6 +2097,28 @@
+ 	return checksum;
+ }
+ 
++/* rx_bottom() stops parsing an aggregate at a descriptor whose length is
++ * invalid or whose frame crosses the end of the URB; the rest of the URB is
++ * dropped without any other counter. A plausible length that crosses the
++ * end means the chip built an aggregate larger than the URB (the RTL8153B
++ * early size programmed in RTL8153A units); the next URB then starts in the
++ * middle of a frame and usually ends in agg_bad_desc.
++ */
++static void rtl_rx_count_abort(struct r8152 *tp, struct rx_agg *agg,
++			       struct rx_desc *rx_desc, unsigned int pkt_len)
++{
++	unsigned int max_len = tp->netdev->mtu + VLAN_ETH_HLEN + CRC_SIZE;
++	unsigned int off = (u8 *)rx_desc - (u8 *)agg->head;
++	struct rtl_rx_diag *d = &tp->rxd;
++
++	if (pkt_len >= ETH_ZLEN && pkt_len <= max_len)
++		d->agg_split++;
++	else
++		d->agg_bad_desc++;
++	if (agg->urb->actual_length > off)
++		d->agg_drop_bytes += agg->urb->actual_length - off;
++}
++
+ static int rx_bottom(struct r8152 *tp, int budget)
+ {
+ 	unsigned long flags;
+@@ -1736,9 +2143,12 @@
+ 		}
+ 	}
+ 
+-	if (list_empty(&tp->rx_done))
++	if (list_empty(&tp->rx_done) || work_done >= budget)
+ 		goto out1;
+ 
++	/* This poll resubmits any buffers parked after -EPROTO */
++	clear_bit(RX_EPROTO, &tp->flags);
++
+ 	INIT_LIST_HEAD(&rx_queue);
+ 	spin_lock_irqsave(&tp->rx_lock, flags);
+ 	list_splice_init(&tp->rx_done, &rx_queue);
+@@ -1751,6 +2161,14 @@
+ 		struct urb *urb;
+ 		u8 *rx_data;
+ 
++		/* An aggregate may hold more packets than the budget. Finish
++		 * the current one (the excess goes to tp->rx_queue) but do not
++		 * start the next one: it stays on rx_done for the next poll,
++		 * so one poll never copies all RTL8152_MAX_RX buffers at once.
++		 */
++		if (work_done >= budget)
++			break;
++
+ 		list_del_init(cursor);
+ 
+ 		agg = list_entry(cursor, struct rx_agg, list);
+@@ -1769,12 +2187,16 @@
+ 			struct sk_buff *skb;
+ 
+ 			pkt_len = le32_to_cpu(rx_desc->opts1) & RX_LEN_MASK;
+-			if (pkt_len < ETH_ZLEN)
++			if (pkt_len < ETH_ZLEN) {
++				rtl_rx_count_abort(tp, agg, rx_desc, pkt_len);
+ 				break;
++			}
+ 
+ 			len_used += pkt_len;
+-			if (urb->actual_length < len_used)
++			if (urb->actual_length < len_used) {
++				rtl_rx_count_abort(tp, agg, rx_desc, pkt_len);
+ 				break;
++			}
+ 
+ 			pkt_len -= CRC_SIZE;
+ 			rx_data += sizeof(struct rx_desc);
+@@ -1815,9 +2237,10 @@
+ 		}
+ 	}
+ 
++	/* Put the unprocessed aggregates back in front, keeping rx order */
+ 	if (!list_empty(&rx_queue)) {
+ 		spin_lock_irqsave(&tp->rx_lock, flags);
+-		list_splice_tail(&rx_queue, &tp->rx_done);
++		list_splice(&rx_queue, &tp->rx_done);
+ 		spin_unlock_irqrestore(&tp->rx_lock, flags);
+ 	}
+ 
+@@ -1885,11 +2308,18 @@
+ 	struct r8152 *tp = container_of(napi, struct r8152, napi);
+ 	int work_done;
+ 
+-	work_done = rx_bottom(tp, budget);
++	/* Send packets already queued before this poll (e.g. game input or
++	 * TCP ACKs) before the RX copy loop, which can drain several completed
++	 * aggregates; then again for packets queued while it ran.
++	 */
+ 	bottom_half(tp);
++	work_done = rx_bottom(tp, budget);
++	if (!skb_queue_empty(&tp->tx_queue))
++		bottom_half(tp);
+ 
+ 	if (work_done < budget) {
+-		napi_complete(napi);
++		/* Upstream a3307f9b1b36: report the work for gro_flush_timeout */
++		napi_complete_done(napi, work_done);
+ 		if (!list_empty(&tp->rx_done))
+ 			napi_schedule(napi);
+ 		else if (!skb_queue_empty(&tp->tx_queue) &&
+@@ -2174,6 +2604,16 @@
+ 	return 0;
+ }
+ 
++/* Upstream 9fae54186c64: "r8153b_rx_agg_chg_indicate() needs to be called
++ * after enabling TX/RX and before calling rxdy_gated_en(tp, false).
++ * Otherwise, the change of the settings of RX aggregation wouldn't work."
++ */
++static inline void r8153b_rx_agg_chg_indicate(struct r8152 *tp)
++{
++	ocp_write_byte(tp, MCU_TYPE_USB, USB_UPT_RXDMA_OWN,
++		       OWN_UPDATE | OWN_CLEAR);
++}
++
+ static int rtl_enable(struct r8152 *tp)
+ {
+ 	u32 ocp_data;
+@@ -2184,6 +2624,9 @@
+ 	ocp_data |= CR_RE | CR_TE;
+ 	ocp_write_byte(tp, MCU_TYPE_PLA, PLA_CR, ocp_data);
+ 
++	if (rtl_8153b(tp) && rx_agg_indicate)
++		r8153b_rx_agg_chg_indicate(tp);
++
+ 	rxdy_gated_en(tp, false);
+ 
+ 	return 0;
+@@ -2200,17 +2643,58 @@
+ 	return rtl_enable(tp);
+ }
+ 
++/* Effective RX aggregation timeout in ns (rx_coalesce_ns overrides). */
++static u32 rtl_rx_coalesce(struct r8152 *tp)
++{
++	int ns = READ_ONCE(rx_coalesce_ns);
++
++	if (ns >= 0)
++		return clamp_t(u32, ns, 8, COALESCE_SLOW);
++	return tp->coalesce;
++}
++
+ static void r8153_set_rx_early_timeout(struct r8152 *tp)
+ {
+-	u32 ocp_data = tp->coalesce / 8;
++	u32 ocp_data = rtl_rx_coalesce(tp) / 8;
++
++	if (rtl_8153b(tp) && rx_tmr_8153b) {
++		/* Upstream 65b82d696b9e: "The RTL8153B uses
++		 * USB_RX_EXTRA_AGGR_TMR for rx timeout primarily. For
++		 * USB_RX_EARLY_TIMEOUT, we fix it to 128ns." (Realtek
++		 * v2.22.1: 1264 ns; rx_early_timeout_ns).
++		 */
++		ocp_write_word(tp, MCU_TYPE_USB, USB_RX_EARLY_TIMEOUT,
++			       rx_early_timeout_ns / 8);
++		ocp_write_word(tp, MCU_TYPE_USB, USB_RX_EXTRA_AGGR_TMR,
++			       ocp_data);
++		return;
++	}
++
++	/* Legacy timer on the RTL8153B: undo the 15 us an earlier load
++	 * left in USB_RX_EXTRA_AGGR_TMR, if the cold value is known.
++	 */
++	if (rtl_8153b(tp) && legacy_extra_aggr_tmr >= 0)
++		ocp_write_word(tp, MCU_TYPE_USB, USB_RX_EXTRA_AGGR_TMR,
++			       legacy_extra_aggr_tmr & 0xffff);
+ 
+ 	ocp_write_word(tp, MCU_TYPE_USB, USB_RX_EARLY_TIMEOUT, ocp_data);
+ }
+ 
+ static void r8153_set_rx_early_size(struct r8152 *tp)
+ {
+-	u32 mtu = tp->netdev->mtu;
+-	u32 ocp_data = (agg_buf_sz - mtu - VLAN_ETH_HLEN - VLAN_HLEN) / 4;
++	u32 ocp_data = agg_buf_sz - rx_reserved_size(tp->netdev->mtu);
++
++	/* The RTL8153B counts the early size in 8-byte units (upstream
++	 * 65b82d696b9e, Realtek v2.22.1), the RTL8153A in 4-byte units.
++	 * With /4 an RTL8153B builds aggregates of about twice agg_buf_sz
++	 * that the URB cuts in two (rx_agg_split, rx_agg_bad_desc): on the
++	 * TV 41-45% of a UDP burst was lost after the adapter had counted
++	 * it in rx_ok, and 0% with /8.
++	 */
++	if (rtl_8153b(tp))
++		ocp_data /= 8;
++	else
++		ocp_data /= 4;
+ 
+ 	ocp_write_word(tp, MCU_TYPE_USB, USB_RX_EARLY_SIZE, ocp_data);
+ }
+@@ -2268,6 +2752,24 @@
+ 	rtl8152_nic_reset(tp);
+ }
+ 
++/* Upstream 93fe9b183840: "Reset the BMU to clear the rx/tx fifo. This
++ * avoids that the unexpected data remains in the hw." RTL8153B paths only
++ * (init_8153b), so the RTL8153A keeps the LG behaviour.
++ */
++static void rtl_reset_bmu(struct r8152 *tp)
++{
++	u32 ocp_data;
++
++	if (!bmu_reset)
++		return;
++
++	ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, USB_BMU_RESET);
++	ocp_data &= ~(BMU_RESET_EP_IN | BMU_RESET_EP_OUT);
++	ocp_write_byte(tp, MCU_TYPE_USB, USB_BMU_RESET, ocp_data);
++	ocp_data |= BMU_RESET_EP_IN | BMU_RESET_EP_OUT;
++	ocp_write_byte(tp, MCU_TYPE_USB, USB_BMU_RESET, ocp_data);
++}
++
+ static void r8152_power_cut_en(struct r8152 *tp, bool enable)
+ {
+ 	u32 ocp_data;
+@@ -2392,10 +2894,32 @@
+ 		device_set_wakeup_enable(&tp->udev->dev, false);
+ }
+ 
++static void r8153b_u1u2en(struct r8152 *tp, bool enable)
++{
++	u32 ocp_data;
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_LPM_CONFIG);
++	if (enable)
++		ocp_data |= LPM_U1U2_EN;
++	else
++		ocp_data &= ~LPM_U1U2_EN;
++	ocp_write_word(tp, MCU_TYPE_USB, USB_LPM_CONFIG, ocp_data);
++}
++
+ static void r8153_u1u2en(struct r8152 *tp, bool enable)
+ {
+ 	u8 u1u2[8];
+ 
++	/* RTL8153B: U1/U2 is LPM_U1U2_EN, not the RTL8153A USB_TOLERANCE
++	 * bytes, and only at SuperSpeed: "For certain platforms, it causes
++	 * USB reset periodically" at high speed (upstream a0246dafe684).
++	 */
++	if (rtl_8153b_init(tp)) {
++		r8153b_u1u2en(tp, enable &&
++			      tp->udev->speed >= USB_SPEED_SUPER);
++		return;
++	}
++
+ 	if (enable)
+ 		memset(u1u2, 0xff, sizeof(u1u2));
+ 	else
+@@ -2408,6 +2932,12 @@
+ {
+ 	u32 ocp_data;
+ 
++	/* RTL8153B: "Enable U2P3 may miss zero packet for bulk-in"
++	 * (upstream 809a7fc6593f); allowed only with the u2p3 parameter.
++	 */
++	if (rtl_8153b(tp) && !u2p3_8153b)
++		enable = false;
++
+ 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_U2P3_CTRL);
+ 	if (enable && tp->version != RTL_VER_03 && tp->version != RTL_VER_04)
+ 		ocp_data |= U2P3_ENABLE;
+@@ -2416,10 +2946,141 @@
+ 	ocp_write_word(tp, MCU_TYPE_USB, USB_U2P3_CTRL, ocp_data);
+ }
+ 
++/* Upstream r8153b_power_cut_en(): PHASE2_EN is left alone when disabling. */
++static void r8153b_power_cut_en(struct r8152 *tp, bool enable)
++{
++	u32 ocp_data;
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_POWER_CUT);
++	if (enable)
++		ocp_data |= PWR_EN | PHASE2_EN;
++	else
++		ocp_data &= ~PWR_EN;
++	ocp_write_word(tp, MCU_TYPE_USB, USB_POWER_CUT, ocp_data);
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_MISC_0);
++	ocp_data &= ~PCUT_STATUS;
++	ocp_write_word(tp, MCU_TYPE_USB, USB_MISC_0, ocp_data);
++}
++
++/* Ultra power saving off (upstream r8153b_ups_en(tp, false) without the
++ * UPS flags and the PHY re-init after a power cut, which this driver does
++ * at the next up).
++ */
++static void r8153b_ups_disable(struct r8152 *tp)
++{
++	u32 ocp_data;
++
++	ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, USB_POWER_CUT);
++	ocp_data &= ~(UPS_EN | USP_PREWAKE);
++	ocp_write_byte(tp, MCU_TYPE_USB, USB_POWER_CUT, ocp_data);
++
++	ocp_data = ocp_read_byte(tp, MCU_TYPE_USB, USB_MISC_2);
++	ocp_data &= ~UPS_FORCE_PWR_DOWN;
++	ocp_write_byte(tp, MCU_TYPE_USB, USB_MISC_2, ocp_data);
++}
++
++/* Upstream r8153_queue_wake(tp, false): no runtime-D3 hint, no stale
++ * link-change event.
++ */
++static void r8153b_queue_wake_off(struct r8152 *tp)
++{
++	u32 ocp_data;
++
++	ocp_data = ocp_read_byte(tp, MCU_TYPE_PLA, PLA_INDICATE_FALG);
++	ocp_data &= ~UPCOMING_RUNTIME_D3;
++	ocp_write_byte(tp, MCU_TYPE_PLA, PLA_INDICATE_FALG, ocp_data);
++
++	ocp_data = ocp_read_byte(tp, MCU_TYPE_PLA, PLA_SUSPEND_FLAG);
++	ocp_data &= ~LINK_CHG_EVENT;
++	ocp_write_byte(tp, MCU_TYPE_PLA, PLA_SUSPEND_FLAG, ocp_data);
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_EXTRA_STATUS);
++	ocp_data &= ~LINK_CHANGE_FLAG;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_EXTRA_STATUS, ocp_data);
++}
++
++/* PLA_MCU_SPDWN_EN may only be set while TX/RX are disabled, "Otherwise,
++ * the packet loss may occur" (upstream 08997b5eec08).
++ */
++static void r8153b_mcu_spdwn_en(struct r8152 *tp, bool enable)
++{
++	u32 ocp_data;
++
++	if (mac_clk_spdwn == 2)
++		return;
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3);
++	if (enable)
++		ocp_data |= PLA_MCU_SPDWN_EN;
++	else
++		ocp_data &= ~PLA_MCU_SPDWN_EN;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3, ocp_data);
++}
++
++/* RTL8153A MAC clock speed-down table (LG r8153_init()). */
++static void r8153_mac_clk_table(struct r8152 *tp)
++{
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL, ALDPS_SPDWN_RATIO);
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2, EEE_SPDWN_RATIO);
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3,
++		       PKT_AVAIL_SPDWN_EN | SUSPEND_SPDWN_EN |
++		       U1U2_SPDWN_EN | L1_SPDWN_EN);
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4,
++		       PWRSAVE_SPDWN_EN | RXDV_SPDWN_EN | TX10MIDLE_EN |
++		       TP100_SPDWN_EN | TP500_SPDWN_EN | TP1000_SPDWN_EN |
++		       EEE_SPDWN_EN);
++}
++
++/* RTL8153B MAC clock speed-down per the mac_clk_spdwn parameter. Modes 0
++ * and 1 touch only MAC_CLK_SPDWN_EN and PLA_MCU_SPDWN_EN, as upstream and
++ * Realtek do; values an earlier driver wrote to PLA_MAC_PWR_CTRL/CTRL4
++ * stay until the adapter loses power.
++ */
++static void r8153b_mac_clk_cfg(struct r8152 *tp)
++{
++	u32 ocp_data;
++
++	if (mac_clk_spdwn == 2) {
++		r8153_mac_clk_table(tp);
++		return;
++	}
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2);
++	if (mac_clk_spdwn)
++		ocp_data |= MAC_CLK_SPDWN_EN;
++	else
++		ocp_data &= ~MAC_CLK_SPDWN_EN;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2, ocp_data);
++
++	r8153b_mcu_spdwn_en(tp, false);
++}
++
++/* Upstream d7f1b59655ef: "For RTL8153B with QFN32, disable test IO.
++ * Otherwise, it may cause abnormal behavior for the device randomly."
++ */
++static void r8153b_test_io_off(struct r8152 *tp)
++{
++	u32 ocp_data;
++
++	if (tp->version != RTL_VER_09 ||
++	    !(ocp_read_byte(tp, MCU_TYPE_PLA, PLA_PKG_ID) & BIT(5)))
++		return;
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_PHY_PWR);
++	ocp_data |= TEST_IO_OFF;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_PHY_PWR, ocp_data);
++}
++
+ static void r8153_power_cut_en(struct r8152 *tp, bool enable)
+ {
+ 	u32 ocp_data;
+ 
++	if (rtl_8153b_init(tp)) {
++		r8153b_power_cut_en(tp, enable);
++		return;
++	}
++
+ 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_POWER_CUT);
+ 	if (enable)
+ 		ocp_data |= PWR_EN | PHASE2_EN;
+@@ -2709,6 +3370,66 @@
+ 	set_bit(PHY_RESET, &tp->flags);
+ }
+ 
++static void r8153_enable_eee(struct r8152 *tp);
++static void r8153_eee_en(struct r8152 *tp, bool enable);
++
++/* RTL8153B PHY parameters (phy_8153b), from upstream r8153b_hw_phy_cfg()
++ * (v6.6) without the firmware, the UPS timing and Advanced EEE. Called with
++ * ALDPS off, like r8153_hw_phy_cfg(). The RTL8153A SRAM impedance, LPF and
++ * 10M amplitude words are not written.
++ */
++static void r8153b_hw_phy_cfg(struct r8152 *tp)
++{
++	u32 ocp_data;
++	u16 data;
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_MISC_0);
++	if (ocp_data & PCUT_STATUS) {
++		ocp_data &= ~PCUT_STATUS;
++		ocp_write_word(tp, MCU_TYPE_USB, USB_MISC_0, ocp_data);
++	}
++
++	/* disable EEE before updating the PHY parameters */
++	r8153_eee_en(tp, false);
++	ocp_reg_write(tp, OCP_EEE_ADV, 0);
++
++	data = r8152_mdio_read(tp, MII_BMCR);
++	if (data & BMCR_PDOWN) {
++		data &= ~BMCR_PDOWN;
++		r8152_mdio_write(tp, MII_BMCR, data);
++	}
++
++	/* green ethernet (r8153b_green_en(tp, true)) */
++	sram_write(tp, 0x8045, 0);	/* 10M abiq&ldvbias */
++	sram_write(tp, 0x804d, 0x1222);	/* 100M short abiq&ldvbias */
++	sram_write(tp, 0x805d, 0x0022);	/* 1000M short abiq&ldvbias */
++	data = sram_read(tp, SRAM_GREEN_CFG);
++	data |= GREEN_ETH_EN | R_TUNE_EN;
++	sram_write(tp, SRAM_GREEN_CFG, data);
++
++	data = ocp_reg_read(tp, OCP_NCTL_CFG);
++	data |= PGA_RETURN_EN;
++	ocp_reg_write(tp, OCP_NCTL_CFG, data);
++
++	/* ADC Bias Calibration:
++	 * read efuse offset 0x7d to get a 17-bit data. Remove the dummy/fake
++	 * bit (bit3) to rebuild the real 16-bit data. Write the data to the
++	 * ADC ioffset.
++	 */
++	ocp_data = r8152_efuse_read(tp, 0x7d);
++	data = (u16)(((ocp_data & 0x1fff0) >> 1) | (ocp_data & 0x7));
++	if (data != 0xffff)
++		ocp_reg_write(tp, OCP_ADC_IOFFSET, data);
++
++	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_PHY_PWR);
++	ocp_data |= PFM_PWM_SWITCH;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_PHY_PWR, ocp_data);
++
++	r8153_enable_eee(tp);
++
++	set_bit(PHY_RESET, &tp->flags);
++}
++
+ static void r8153_first_init(struct r8152 *tp)
+ {
+ 	u32 ocp_data;
+@@ -2721,9 +3442,14 @@
+ 	ocp_data &= ~RCR_ACPT_ALL;
+ 	ocp_write_dword(tp, MCU_TYPE_PLA, PLA_RCR, ocp_data);
+ 
+-	r8153_hw_phy_cfg(tp);
++	if (rtl_8153b(tp) && phy_8153b)
++		r8153b_hw_phy_cfg(tp);
++	else
++		r8153_hw_phy_cfg(tp);
+ 
+ 	rtl8152_nic_reset(tp);
++	if (rtl_8153b_init(tp))
++		rtl_reset_bmu(tp);
+ 
+ 	ocp_data = ocp_read_byte(tp, MCU_TYPE_PLA, PLA_OOB_CTRL);
+ 	ocp_data &= ~NOW_IS_OOB;
+@@ -2753,7 +3479,9 @@
+ 
+ 	rtl_rx_vlan_en(tp, tp->netdev->features & NETIF_F_HW_VLAN_CTAG_RX);
+ 
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_RMS, RTL8153_RMS);
++	/* Accept only frames that fit the rx_reserved_size() headroom */
++	ocp_data = tp->netdev->mtu + VLAN_ETH_HLEN + CRC_SIZE;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_RMS, ocp_data);
+ 	ocp_write_byte(tp, MCU_TYPE_PLA, PLA_MTPS, MTPS_JUMBO);
+ 
+ 	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_TCR0);
+@@ -2773,6 +3501,13 @@
+ 	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_USB_CTRL);
+ 	ocp_data &= ~(RX_AGG_DISABLE | RX_ZERO_EN);
+ 	ocp_write_word(tp, MCU_TYPE_USB, USB_USB_CTRL, ocp_data);
++
++	/* Upstream rtl8153b_up(), right after r8153_first_init() */
++	if (rtl_8153b(tp) && rx_thr_b)
++		ocp_write_dword(tp, MCU_TYPE_USB, USB_RX_BUF_TH, RX_THR_B);
++	else if (rtl_8153b(tp) && legacy_rx_buf_th)
++		ocp_write_dword(tp, MCU_TYPE_USB, USB_RX_BUF_TH,
++				legacy_rx_buf_th);
+ }
+ 
+ static void r8153_enter_oob(struct r8152 *tp)
+@@ -2785,6 +3520,8 @@
+ 	ocp_write_byte(tp, MCU_TYPE_PLA, PLA_OOB_CTRL, ocp_data);
+ 
+ 	rtl_disable(tp);
++	if (rtl_8153b_init(tp))
++		rtl_reset_bmu(tp);
+ 
+ 	for (i = 0; i < 1000; i++) {
+ 		ocp_data = ocp_read_byte(tp, MCU_TYPE_PLA, PLA_OOB_CTRL);
+@@ -2804,11 +3541,20 @@
+ 		usleep_range(1000, 2000);
+ 	}
+ 
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_RMS, RTL8153_RMS);
++	ocp_data = tp->netdev->mtu + VLAN_ETH_HLEN + CRC_SIZE;
++	ocp_write_word(tp, MCU_TYPE_PLA, PLA_RMS, ocp_data);
+ 
+-	ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_TEREDO_CFG);
+-	ocp_data &= ~TEREDO_WAKE_MASK;
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_TEREDO_CFG, ocp_data);
++	if (rtl_8153b_init(tp)) {
++		/* Upstream v6.6 r8153_enter_oob() for RTL_VER_08/09: "Clear
++		 * teredo wake event. bit[15:8] is the teredo wakeup type. Set
++		 * it to zero. bits[7:0] are the W1C bits about the events."
++		 */
++		ocp_write_word(tp, MCU_TYPE_PLA, PLA_TEREDO_WAKE_BASE, 0x00ff);
++	} else {
++		ocp_data = ocp_read_word(tp, MCU_TYPE_PLA, PLA_TEREDO_CFG);
++		ocp_data &= ~TEREDO_WAKE_MASK;
++		ocp_write_word(tp, MCU_TYPE_PLA, PLA_TEREDO_CFG, ocp_data);
++	}
+ 
+ 	rtl_rx_vlan_en(tp, true);
+ 
+@@ -2850,6 +3596,8 @@
+ {
+ 	r8153_disable_aldps(tp);
+ 	rtl_disable(tp);
++	if (rtl_8153b_init(tp))
++		rtl_reset_bmu(tp);
+ 	r8153_enable_aldps(tp);
+ 	usb_enable_lpm(tp->udev);
+ }
+@@ -2973,8 +3721,12 @@
+ 		return;
+ 
+ 	r8153_u1u2en(tp, false);
++	if (rtl_8153b_init(tp))
++		r8153_u2p3en(tp, false);
+ 	r8153_disable_aldps(tp);
+ 	r8153_first_init(tp);
++	if (rtl_8153b(tp))
++		r8153b_mcu_spdwn_en(tp, false);
+ 	r8153_enable_aldps(tp);
+ 	r8153_u2p3en(tp, true);
+ 	r8153_u1u2en(tp, true);
+@@ -2988,6 +3740,8 @@
+ 		return;
+ 	}
+ 
++	if (rtl_8153b(tp))
++		r8153b_mcu_spdwn_en(tp, true);
+ 	r8153_u1u2en(tp, false);
+ 	r8153_u2p3en(tp, false);
+ 	r8153_power_cut_en(tp, false);
+@@ -3022,6 +3776,103 @@
+ 		return true;
+ }
+ 
++static void rtl_link_report(struct r8152 *tp, u8 speed)
++{
++	u16 lcl = r8152_mdio_read(tp, MII_ADVERTISE);
++	u16 rmt = r8152_mdio_read(tp, MII_LPA);
++	u8 pause = (speed & FULL_DUP) ? mii_resolve_flowctrl_fdx(lcl, rmt) : 0;
++	u16 eee_adv = 0, eee_lp = 0, eee_mac = 0;
++
++	if (tp->mii.supports_gmii) {
++		eee_adv = ocp_reg_read(tp, OCP_EEE_ADV);
++		eee_lp = ocp_reg_read(tp, OCP_EEE_LPABLE);
++		eee_mac = ocp_read_word(tp, MCU_TYPE_PLA, PLA_EEE_CR) &
++			  (EEE_RX_EN | EEE_TX_EN);
++	}
++
++	netif_info(tp, link, tp->netdev,
++		   "ver %d phystatus 0x%02x %s/%s, pause adv %x lp %x -> tx %d rx %d, eee adv 0x%x lp 0x%x mac 0x%x\n",
++		   tp->version, speed,
++		   (speed & _1000bps) ? "1000" : (speed & _100bps) ? "100" : "10",
++		   (speed & FULL_DUP) ? "full" : "half",
++		   (lcl >> 10) & 3, (rmt >> 10) & 3,
++		   !!(pause & FLOW_CTRL_TX), !!(pause & FLOW_CTRL_RX),
++		   eee_adv, eee_lp, eee_mac);
++}
++
++/* RTL8153B registers whose reset values are undocumented, read back so a
++ * TV run shows what the chip really uses (at probe: what an earlier driver
++ * left; the chip keeps it until it loses power).
++ */
++static void r8153b_dump_regs(struct r8152 *tp, const char *when)
++{
++	struct device *dev = &tp->intf->dev;
++	u16 early_size, early_to, extra_tmr;
++
++	if (!READ_ONCE(dump_regs))
++		return;
++
++	early_size = ocp_read_word(tp, MCU_TYPE_USB, USB_RX_EARLY_SIZE);
++	early_to = ocp_read_word(tp, MCU_TYPE_USB, USB_RX_EARLY_TIMEOUT);
++	extra_tmr = ocp_read_word(tp, MCU_TYPE_USB, USB_RX_EXTRA_AGGR_TMR);
++
++	dev_info(dev,
++		 "%s: rx early_size 0x%04x (%u B) early_timeout 0x%04x (%u ns) extra_aggr_tmr 0x%04x (%u ns) rx_buf_th 0x%08x usb_ctrl 0x%04x\n",
++		 when, early_size, early_size * 8U, early_to, early_to * 8U,
++		 extra_tmr, extra_tmr * 8U,
++		 ocp_read_dword(tp, MCU_TYPE_USB, USB_RX_BUF_TH),
++		 ocp_read_word(tp, MCU_TYPE_USB, USB_USB_CTRL));
++	dev_info(dev,
++		 "%s: usb lpm_config 0x%04x u2p3_ctrl 0x%04x power_cut 0x%04x misc_2 0x%02x fw_ctrl 0x%04x fw_task 0x%04x bmu 0x%02x\n",
++		 when, ocp_read_word(tp, MCU_TYPE_USB, USB_LPM_CONFIG),
++		 ocp_read_word(tp, MCU_TYPE_USB, USB_U2P3_CTRL),
++		 ocp_read_word(tp, MCU_TYPE_USB, USB_POWER_CUT),
++		 ocp_read_byte(tp, MCU_TYPE_USB, USB_MISC_2),
++		 ocp_read_word(tp, MCU_TYPE_USB, USB_FW_CTRL),
++		 ocp_read_word(tp, MCU_TYPE_USB, USB_FW_TASK),
++		 ocp_read_byte(tp, MCU_TYPE_USB, USB_BMU_RESET));
++	dev_info(dev,
++		 "%s: pla mac_pwr_ctrl 0x%04x/0x%04x/0x%04x/0x%04x rxfifo 0x%08x/0x%04x/0x%04x phy_pwr 0x%04x pkg 0x%02x rms %u tcr1 0x%04x\n",
++		 when, ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4),
++		 ocp_read_dword(tp, MCU_TYPE_PLA, PLA_RXFIFO_CTRL0),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_RXFIFO_CTRL1),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_RXFIFO_CTRL2),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_PHY_PWR),
++		 ocp_read_byte(tp, MCU_TYPE_PLA, PLA_PKG_ID),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_RMS),
++		 ocp_read_word(tp, MCU_TYPE_PLA, PLA_TCR1));
++}
++
++/* RTL8153B, probe only (rtl_ops.init() also runs at reset-resume): dump
++ * the registers once autoload is done, and warn if the RTL8153A MAC clock
++ * table of an earlier LG/DEV load is still in the chip. Upstream
++ * 4b5dc1a94d4f: "the register table of RTL8153B is different from
++ * RTL8153A ... That causes RTL8153B becomes unstable".
++ */
++static void r8153b_probe_check(struct r8152 *tp)
++{
++	const u16 a_ctrl4 = PWRSAVE_SPDWN_EN | RXDV_SPDWN_EN | TP1000_SPDWN_EN;
++	u16 ctrl, ctrl4;
++
++	if (!rtl_8153b(tp) || tp->netdev->reg_state != NETREG_UNINITIALIZED)
++		return;
++
++	r8153b_dump_regs(tp, "probe post-autoload");
++
++	if (mac_clk_spdwn == 2)
++		return;
++
++	ctrl = ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL);
++	ctrl4 = ocp_read_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4);
++	if (ctrl == ALDPS_SPDWN_RATIO || (ctrl4 & a_ctrl4) == a_ctrl4)
++		dev_warn(&tp->intf->dev,
++			 "RTL8153A MAC clock table from an earlier driver is active (mac_pwr_ctrl 0x%04x ctrl4 0x%04x); unplug the adapter for a clean RTL8153B test\n",
++			 ctrl, ctrl4);
++}
++
+ static void set_carrier(struct r8152 *tp)
+ {
+ 	struct net_device *netdev = tp->netdev;
+@@ -3039,8 +3890,25 @@
+ 			netif_carrier_on(netdev);
+ 			rtl_start_rx(tp);
+ 			napi_enable(&tp->napi);
++			/* rx completed while napi was disabled lost its
++			 * schedule; local_bh_enable() runs the softirq now
++			 * instead of at the next interrupt.
++			 */
++			local_bh_disable();
++			if (!list_empty(&tp->rx_done))
++				napi_schedule(&tp->napi);
++			local_bh_enable();
+ 			netif_wake_queue(netdev);
+ 			netif_info(tp, link, netdev, "carrier on\n");
++			rtl_link_report(tp, speed);
++			if (rtl_8153b(tp)) {
++				netif_info(tp, link, netdev,
++					   "rx agg: agg_buf_sz %u coalesce %u ns in %s\n",
++					   agg_buf_sz, rtl_rx_coalesce(tp),
++					   rx_tmr_8153b ? "USB_RX_EXTRA_AGGR_TMR" :
++					   "USB_RX_EARLY_TIMEOUT");
++				r8153b_dump_regs(tp, "link-up");
++			}
+ 		}
+ 	} else {
+ 		if (netif_carrier_ok(netdev)) {
+@@ -3087,6 +3955,11 @@
+ 		napi_schedule(&tp->napi);
+ 	}
+ 
++	/* Buffers parked by read_bulk_callback() after -EPROTO */
++	if (test_and_clear_bit(RX_EPROTO, &tp->flags) &&
++	    !list_empty(&tp->rx_done))
++		napi_schedule(&tp->napi);
++
+ 	if (test_bit(PHY_RESET, &tp->flags))
+ 		rtl_phy_reset(tp);
+ 
+@@ -3101,9 +3974,18 @@
+ 	struct r8152 *tp = netdev_priv(netdev);
+ 	int res = 0;
+ 
+-	res = alloc_all_mem(tp);
+-	if (res)
+-		goto out;
++	if (!tp->rx_info[0].buffer) {
++		res = alloc_all_mem(tp);
++		if (res)
++			goto out;
++	} else {
++		int i;
++
++		/* Buffers kept from the last close; all URBs were killed there. */
++		INIT_LIST_HEAD(&tp->tx_free);
++		for (i = 0; i < RTL8152_MAX_TX; i++)
++			list_add_tail(&tp->tx_info[i].list, &tp->tx_free);
++	}
+ 
+ 	netif_carrier_off(netdev);
+ 
+@@ -3146,12 +4028,15 @@
+ static int rtl8152_close(struct net_device *netdev)
+ {
+ 	struct r8152 *tp = netdev_priv(netdev);
+-	int res = 0;
++	int res = 0, i;
+ 
+-	napi_disable(&tp->napi);
+ 	clear_bit(WORK_ENABLE, &tp->flags);
+ 	usb_kill_urb(tp->intr_urb);
+ 	cancel_delayed_work_sync(&tp->schedule);
++	/* After the work is cancelled: set_carrier() also calls
++	 * napi_disable(); a second napi_disable() never returns.
++	 */
++	napi_disable(&tp->napi);
+ 	netif_stop_queue(netdev);
+ 
+ 	res = usb_autopm_get_interface(tp->intf);
+@@ -3168,7 +4053,15 @@
+ 		usb_autopm_put_interface(tp->intf);
+ 	}
+ 
+-	free_all_mem(tp);
++	/* Keep the buffers for the next open (a rename needs down/up);
++	 * they are freed in rtl8152_disconnect(). rtl_ops.down() normally
++	 * killed every URB already (r8153_enter_oob -> rtl_disable), but
++	 * the unplug/autopm-failure branch above leaves the TX URBs alone.
++	 */
++	for (i = 0; i < RTL8152_MAX_RX; i++)
++		usb_kill_urb(tp->rx_info[i].urb);
++	for (i = 0; i < RTL8152_MAX_TX; i++)
++		usb_kill_urb(tp->tx_info[i].urb);
+ 
+ 	return res;
+ }
+@@ -3255,10 +4148,16 @@
+ 	ocp_reg_write(tp, OCP_EEE_CFG, config);
+ }
+ 
++/* Applied by r8153_init() at probe and on every system resume. */
++static bool r8153_eee_param = true;
++module_param_named(eee, r8153_eee_param, bool, 0444);
++MODULE_PARM_DESC(eee, "RTL8153 Energy Efficient Ethernet at init/resume (default: on)");
++
+ static void r8153_enable_eee(struct r8152 *tp)
+ {
+-	r8153_eee_en(tp, true);
+-	ocp_reg_write(tp, OCP_EEE_ADV, MDIO_EEE_1000T | MDIO_EEE_100TX);
++	r8153_eee_en(tp, r8153_eee_param);
++	ocp_reg_write(tp, OCP_EEE_ADV, r8153_eee_param ?
++		      (MDIO_EEE_1000T | MDIO_EEE_100TX) : 0);
+ }
+ 
+ static void r8152b_enable_fc(struct r8152 *tp)
+@@ -3266,7 +4165,17 @@
+ 	u16 anar;
+ 
+ 	anar = r8152_mdio_read(tp, MII_ADVERTISE);
+-	anar |= ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
++	anar &= ~(ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM);
++	switch (fc) {
++	case 0:
++		break;
++	case 2:
++		anar |= ADVERTISE_PAUSE_ASYM;
++		break;
++	default:
++		anar |= ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM;
++		break;
++	}
+ 	r8152_mdio_write(tp, MII_ADVERTISE, anar);
+ }
+ 
+@@ -3336,6 +4245,8 @@
+ 		msleep(20);
+ 	}
+ 
++	r8153b_probe_check(tp);
++
+ 	for (i = 0; i < 500; i++) {
+ 		ocp_data = ocp_reg_read(tp, OCP_PHY_STATUS) & PHY_STAT_MASK;
+ 		if (ocp_data == PHY_STAT_LAN_ON || ocp_data == PHY_STAT_PWRDN)
+@@ -3404,20 +4315,115 @@
+ 	r8153_power_cut_en(tp, false);
+ 	r8153_u1u2en(tp, true);
+ 
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL, ALDPS_SPDWN_RATIO);
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL2, EEE_SPDWN_RATIO);
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL3,
+-		       PKT_AVAIL_SPDWN_EN | SUSPEND_SPDWN_EN |
+-		       U1U2_SPDWN_EN | L1_SPDWN_EN);
+-	ocp_write_word(tp, MCU_TYPE_PLA, PLA_MAC_PWR_CTRL4,
+-		       PWRSAVE_SPDWN_EN | RXDV_SPDWN_EN | TX10MIDLE_EN |
+-		       TP100_SPDWN_EN | TP500_SPDWN_EN | TP1000_SPDWN_EN |
+-		       EEE_SPDWN_EN);
++	if (rtl_8153b(tp))
++		r8153b_mac_clk_cfg(tp);
++	else
++		r8153_mac_clk_table(tp);
++
++	r8153_enable_eee(tp);
++	r8153_enable_aldps(tp);
++	r8152b_enable_fc(tp);
++	rtl_tally_reset(tp);
++	r8153_u2p3en(tp, true);
++}
++
++static u16 r8153_phy_status(struct r8152 *tp, u16 desired)
++{
++	u16 data;
++	int i;
++
++	for (i = 0; i < 500; i++) {
++		data = ocp_reg_read(tp, OCP_PHY_STATUS) & PHY_STAT_MASK;
++		if (desired) {
++			if (data == desired)
++				break;
++		} else if (data == PHY_STAT_LAN_ON || data == PHY_STAT_PWRDN ||
++			   data == PHY_STAT_EXT_INIT) {
++			break;
++		}
++
++		msleep(20);
++		if (test_bit(RTL8152_UNPLUG, &tp->flags))
++			break;
++	}
++
++	return data;
++}
++
++/* RTL8153B init (init_8153b), after upstream r8153b_init() (v6.6) without
++ * the firmware, the UPS flags, the link-poll flags and the runtime-suspend
++ * WOL setup. Unlike r8153_init() it does not write the RTL8153A-only
++ * USB_CSR_DUMMY2, USB_WDT11_CTRL, PLA_LED_FEATURE, USB_LPM_CTRL,
++ * USB_AFE_CTRL2, USB_CONNECT_TIMER or USB_TOLERANCE registers: "the
++ * register table of RTL8153B is different from RTL8153A" (4b5dc1a94d4f).
++ * EEE, ALDPS and flow control are set up as in r8153_init().
++ */
++static void r8153b_init(struct r8152 *tp)
++{
++	u32 ocp_data;
++	u16 data;
++	int i;
++
++	if (test_bit(RTL8152_UNPLUG, &tp->flags))
++		return;
++
++	r8153_disable_aldps(tp);
++	r8153_u1u2en(tp, false);
++
++	for (i = 0; i < 500; i++) {
++		if (ocp_read_word(tp, MCU_TYPE_PLA, PLA_BOOT_CTRL) &
++		    AUTOLOAD_DONE)
++			break;
++		msleep(20);
++		if (test_bit(RTL8152_UNPLUG, &tp->flags))
++			return;
++	}
++
++	r8153b_probe_check(tp);
++
++	r8153_phy_status(tp, 0);
++
++	data = r8152_mdio_read(tp, MII_BMCR);
++	if (data & BMCR_PDOWN) {
++		data &= ~BMCR_PDOWN;
++		r8152_mdio_write(tp, MII_BMCR, data);
++	}
++
++	data = r8153_phy_status(tp, PHY_STAT_LAN_ON);
++	if (data != PHY_STAT_LAN_ON)
++		dev_warn(&tp->intf->dev, "PHY not ready (status %u)\n", data);
++
++	r8153_u2p3en(tp, false);
++
++	/* MSC timer = 0xfff * 8ms = 32760 ms */
++	ocp_write_word(tp, MCU_TYPE_USB, USB_MSC_TIMER, 0x0fff);
++
++	/* U1/U2/L1 idle timer. 500 us (upstream v5.4 r8153b_init) */
++	ocp_write_word(tp, MCU_TYPE_USB, USB_U1U2_TIMER, 500);
++
++	r8153b_power_cut_en(tp, false);
++	r8153b_ups_disable(tp);
++	r8153b_queue_wake_off(tp);
++
++	/* LPM_U1U2_EN only at SuperSpeed (r8153_u1u2en()) */
++	r8153_u1u2en(tp, true);
++
++	/* As upstream; a no-op below SuperSpeed (usb_enable_lpm()) */
++	usb_enable_lpm(tp->udev);
++
++	r8153b_mac_clk_cfg(tp);
++	r8153b_test_io_off(tp);
++
++	/* rx aggregation */
++	ocp_data = ocp_read_word(tp, MCU_TYPE_USB, USB_USB_CTRL);
++	ocp_data &= ~(RX_AGG_DISABLE | RX_ZERO_EN);
++	ocp_write_word(tp, MCU_TYPE_USB, USB_USB_CTRL, ocp_data);
+ 
+ 	r8153_enable_eee(tp);
+ 	r8153_enable_aldps(tp);
+ 	r8152b_enable_fc(tp);
+ 	rtl_tally_reset(tp);
++	/* U2P3 stays off unless the u2p3 parameter allows it */
+ 	r8153_u2p3en(tp, true);
+ }
+ 
+@@ -3434,10 +4440,10 @@
+ 		return 0;
+ 
+ 	netif_stop_queue(netdev);
+-	napi_disable(&tp->napi);
+ 	clear_bit(WORK_ENABLE, &tp->flags);
+ 	usb_kill_urb(tp->intr_urb);
+ 	cancel_delayed_work_sync(&tp->schedule);
++	napi_disable(&tp->napi);
+ 	if (netif_carrier_ok(netdev)) {
+ 		mutex_lock(&tp->control);
+ 		tp->rtl_ops.disable(tp);
+@@ -3459,19 +4465,28 @@
+ 	if (!netif_running(netdev))
+ 		return 0;
+ 
++	/* WORK_ENABLE is set under tp->control: rtl8153b_restart_txrx()
++	 * (ethtool -C, MTU change) runs under it and must not see the flag
++	 * while NAPI is still disabled by rtl8152_pre_reset().
++	 */
++	mutex_lock(&tp->control);
+ 	set_bit(WORK_ENABLE, &tp->flags);
+ 	if (netif_carrier_ok(netdev)) {
+-		mutex_lock(&tp->control);
+ 		tp->rtl_ops.enable(tp);
+ 		rtl_start_rx(tp);
+ 		rtl8152_set_rx_mode(netdev);
+-		mutex_unlock(&tp->control);
+ 	}
++	mutex_unlock(&tp->control);
+ 
+ 	napi_enable(&tp->napi);
+ 	netif_wake_queue(netdev);
+ 	usb_submit_urb(tp->intr_urb, GFP_KERNEL);
+ 
++	local_bh_disable();
++	if (!list_empty(&tp->rx_done))
++		napi_schedule(&tp->napi);
++	local_bh_enable();
++
+ 	return 0;
+ }
+ 
+@@ -3762,8 +4777,26 @@
+ 	"rx_multicast",
+ 	"tx_aborted",
+ 	"tx_underrun",
++	/* driver counters, see struct rtl_rx_diag */
++	"rx_drv_packets",
++	"rx_drv_dropped",
++	"rx_urb_bytes",
++	"rx_urb_runt",
++	"rx_urb_lt2k",
++	"rx_urb_lt8k",
++	"rx_urb_lt16k",
++	"rx_urb_lt20k",
++	"rx_urb_ge20k",
++	"rx_urb_esz",
++	"rx_urb_eproto",
++	"rx_urb_err",
++	"rx_agg_split",
++	"rx_agg_bad_desc",
++	"rx_agg_drop_bytes",
+ };
+ 
++#define RTL_TALLY_STATS		13
++
+ static int rtl8152_get_sset_count(struct net_device *dev, int sset)
+ {
+ 	switch (sset) {
+@@ -3778,7 +4811,28 @@
+ 				      struct ethtool_stats *stats, u64 *data)
+ {
+ 	struct r8152 *tp = netdev_priv(dev);
++	struct rtl_rx_diag *d = &tp->rxd;
+ 	struct tally_counter tally;
++	u64 *drv = data + RTL_TALLY_STATS;
++	int i;
++
++	BUILD_BUG_ON(ARRAY_SIZE(rtl8152_gstrings) !=
++		     RTL_TALLY_STATS + 5 + RX_BIN_NUM + 3);
++
++	/* Driver counters first: they do not need the device awake */
++	*drv++ = dev->stats.rx_packets;
++	*drv++ = dev->stats.rx_dropped;
++	*drv++ = d->urb_bytes;
++	for (i = 0; i < RX_BIN_NUM; i++)
++		*drv++ = d->urb_bin[i];
++	*drv++ = d->urb_eproto;
++	*drv++ = d->urb_err;
++	*drv++ = d->agg_split;
++	*drv++ = d->agg_bad_desc;
++	*drv++ = d->agg_drop_bytes;
++
++	/* The 4.4 ethtool core kmallocs this buffer without zeroing it */
++	memset(data, 0, RTL_TALLY_STATS * sizeof(u64));
+ 
+ 	if (usb_autopm_get_interface(tp->intf) < 0)
+ 		return;
+@@ -3972,11 +5026,44 @@
+ 		break;
+ 	}
+ 
+-	coalesce->rx_coalesce_usecs = tp->coalesce;
++	/* The value in use (ns, as upstream): rx_coalesce_ns may override */
++	coalesce->rx_coalesce_usecs = rtl_rx_coalesce(tp);
+ 
+ 	return 0;
+ }
+ 
++/* Upstream 9fae54186c64: "If rx_coalesce_usecs is changed, restart TX/RX to
++ * let the setting work." The RTL8153B latches the RX aggregation settings
++ * only in rtl_enable(). Called with tp->control held and the carrier on.
++ */
++static void rtl8153b_restart_txrx(struct r8152 *tp)
++{
++	struct net_device *netdev = tp->netdev;
++
++	/* Between rtl8152_pre_reset() and rtl8152_post_reset() NAPI is
++	 * disabled without tp->control: napi_disable() here would spin
++	 * forever while post_reset waits for the mutex. The enable() in
++	 * post_reset (or the next link-up) applies the new settings.
++	 */
++	if (!test_bit(WORK_ENABLE, &tp->flags))
++		return;
++
++	netif_stop_queue(netdev);
++	napi_disable(&tp->napi);
++	tp->rtl_ops.disable(tp);
++	tp->rtl_ops.enable(tp);
++	rtl_start_rx(tp);
++	clear_bit(RTL8152_SET_RX_MODE, &tp->flags);
++	_rtl8152_set_rx_mode(netdev);
++	napi_enable(&tp->napi);
++	/* rx completed while napi was disabled lost its schedule */
++	local_bh_disable();
++	if (!list_empty(&tp->rx_done))
++		napi_schedule(&tp->napi);
++	local_bh_enable();
++	netif_wake_queue(netdev);
++}
++
+ static int rtl8152_set_coalesce(struct net_device *netdev,
+ 				struct ethtool_coalesce *coalesce)
+ {
+@@ -4002,10 +5089,20 @@
+ 	mutex_lock(&tp->control);
+ 
+ 	if (tp->coalesce != coalesce->rx_coalesce_usecs) {
++		/* With rx_coalesce_ns >= 0 the programmed value does not
++		 * change: skip the TX/RX restart (>= 20 ms without traffic).
++		 */
++		u32 old = rtl_rx_coalesce(tp);
++
+ 		tp->coalesce = coalesce->rx_coalesce_usecs;
+ 
+-		if (netif_running(tp->netdev) && netif_carrier_ok(netdev))
+-			r8153_set_rx_early_timeout(tp);
++		if (rtl_rx_coalesce(tp) != old && netif_running(netdev) &&
++		    netif_carrier_ok(netdev)) {
++			if (rtl_8153b(tp) && rx_agg_indicate)
++				rtl8153b_restart_txrx(tp);
++			else
++				r8153_set_rx_early_timeout(tp);
++		}
+ 	}
+ 
+ 	mutex_unlock(&tp->control);
+@@ -4103,8 +5200,18 @@
+ 
+ 	dev->mtu = new_mtu;
+ 
+-	if (netif_running(dev) && netif_carrier_ok(dev))
+-		r8153_set_rx_early_size(tp);
++	if (netif_running(dev)) {
++		u32 rms = new_mtu + VLAN_ETH_HLEN + CRC_SIZE;
++
++		ocp_write_word(tp, MCU_TYPE_PLA, PLA_RMS, rms);
++
++		if (netif_carrier_ok(dev)) {
++			if (rtl_8153b(tp) && rx_agg_indicate)
++				rtl8153b_restart_txrx(tp);
++			else
++				r8153_set_rx_early_size(tp);
++		}
++	}
+ 
+ 	mutex_unlock(&tp->control);
+ 
+@@ -4219,7 +5326,13 @@
+ 	case RTL_VER_06:
+ 	case RTL_VER_08:
+ 	case RTL_VER_09:
+-		ops->init		= r8153_init;
++		/* RTL8153B: the RTL8153A enable/disable/up/down with RTL8153B
++		 * branches inside; its own init unless init_8153b=0.
++		 */
++		if (rtl_8153b_init(tp))
++			ops->init	= r8153b_init;
++		else
++			ops->init	= r8153_init;
+ 		ops->enable		= rtl8153_enable;
+ 		ops->disable		= rtl8153_disable;
+ 		ops->up			= rtl8153_up;
+@@ -4247,6 +5360,15 @@
+ 	struct net_device *netdev;
+ 	int ret;
+ 
++	if (agg_buf_sz_req < 16384 || agg_buf_sz_req > 32768 ||
++	    (agg_buf_sz_req & 4095)) {
++		dev_warn(&intf->dev, "agg_buf_sz %u invalid, using 16384\n",
++			 agg_buf_sz_req);
++		agg_buf_sz_req = 16384;
++	}
++	agg_buf_sz = agg_buf_sz_req;
++	dev_info(&intf->dev, "agg_buf_sz %u\n", agg_buf_sz);
++
+ 	if (udev->actconfig->desc.bConfigurationValue != 1) {
+ 		usb_driver_set_configuration(udev, 1);
+ 		return -ENODEV;
+@@ -4317,6 +5439,39 @@
+ 		break;
+ 	}
+ 
++	if (rtl_8153b(tp)) {
++		/* The speed table above is RTL8153A-only (49d10347d445);
++		 * upstream and Realtek use 15 us on the RTL8153B.
++		 */
++		if (rx_tmr_8153b)
++			tp->coalesce = COALESCE_8153B;
++		rx_early_timeout_ns = clamp_t(int, rx_early_timeout_ns, 8,
++					      COALESCE_SLOW);
++		if (mac_clk_spdwn < 0 || mac_clk_spdwn > 2)
++			mac_clk_spdwn = 0;
++		dev_info(&intf->dev,
++			 "RTL8153B ver %u: rx_tmr_8153b %d rx_early_timeout_ns %d coalesce %u ns rx_coalesce_ns %d rx_agg_indicate %d rx_thr_b %d init_8153b %d bmu_reset %d u2p3 %d mac_clk_spdwn %d phy_8153b %d autosuspend %d fc %d eee %d legacy_extra_aggr_tmr %d legacy_rx_buf_th 0x%08x\n",
++			 tp->version, rx_tmr_8153b, rx_early_timeout_ns,
++			 tp->coalesce, rx_coalesce_ns, rx_agg_indicate,
++			 rx_thr_b, init_8153b, bmu_reset, u2p3_8153b,
++			 mac_clk_spdwn, phy_8153b, rtl_autosuspend, fc,
++			 r8153_eee_param, legacy_extra_aggr_tmr,
++			 legacy_rx_buf_th);
++		/* Before AUTOLOAD_DONE: what an earlier driver left, possibly
++		 * mid-autoload; r8153b_probe_check() dumps again after it.
++		 */
++		r8153b_dump_regs(tp, "probe pre-autoload");
++
++		/* A runtime resume costs at least 20 ms of USB 2.0 resume
++		 * signalling on the first packet after idle. The policy lives
++		 * in the usb_device, so set it both ways.
++		 */
++		if (rtl_autosuspend)
++			usb_enable_autosuspend(udev);
++		else
++			usb_disable_autosuspend(udev);
++	}
++
+ 	intf->needs_remote_wakeup = 1;
+ 
+ 	tp->rtl_ops.init(tp);
+@@ -4366,6 +5521,7 @@
+ 		netif_napi_del(&tp->napi);
+ 		unregister_netdev(tp->netdev);
+ 		tp->rtl_ops.unload(tp);
++		free_all_mem(tp);
+ 		free_netdev(tp->netdev);
+ 	}
+ }
